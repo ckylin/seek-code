@@ -71,13 +71,20 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
     }
 
     // ── Raw-mode interactive input with real-time slash dropdown ──
+    //
+    // cursorPos is always a Unicode code-point index into cpBuf.
+    // buffer (string) is derived from cpBuf and kept in sync.
+    // All mutations go through cpBuf so surrogate pairs / CJK are handled correctly.
 
-    let buffer = '';
-    let cursorPos = 0; // position within buffer
-    let historyIdx = history.length; // current position in history (history.length = new input)
+    let cpBuf: string[] = [];          // code-point array
+    let buffer = '';                   // cpBuf.join('') — kept in sync
+    let cursorPos = 0;                 // code-point index
+    let historyIdx = history.length;
     let dropdownVisible = false;
     let dropdownIdx = 0;
     let lastHeight = 0;
+
+    const syncBuffer = (): void => { buffer = cpBuf.join(''); };
 
     // Save original terminal state
     stdin.setRawMode(true);
@@ -90,46 +97,38 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
     const prompt = chalk.blue('> ');
 
     const render = (): void => {
-      // If dropdown was open, move cursor up past dropdown lines then clear to bottom.
-      // Otherwise just clear the current input line in place.
       if (lastHeight > 0) {
         stdout.write(`\x1B[${lastHeight}A\r\x1B[J`);
       } else {
         stdout.write('\r\x1B[K');
       }
 
-      // Write prompt + buffer
-      const display = buffer.length === 0 ? '' : buffer;
-      stdout.write(prompt + display);
+      stdout.write(prompt + buffer);
 
-      // Position cursor (prompt visible width is always 2: "> ")
+      // Cursor column = prompt width (2) + display width of chars before cursor
       const promptLen = 2;
-      const absPos = promptLen + stringWidth(buffer.slice(0, cursorPos));
+      const absPos = promptLen + stringWidth(cpBuf.slice(0, cursorPos).join(''));
       stdout.write(`\r\x1B[${absPos}C`);
 
-      // Draw dropdown if visible
       if (dropdownVisible) {
         const items = getFilteredCommands();
         if (items.length > 0) {
           const lines: string[] = [];
           for (let i = 0; i < items.length; i++) {
             const sel = i === dropdownIdx;
-            const cursor = sel ? chalk.blue('  ❯ ') : '    ';
+            const cur = sel ? chalk.blue('  ❯ ') : '    ';
             const label = sel ? chalk.bold.white(items[i].name) : chalk.white(items[i].name);
             const desc = items[i].desc
               ? chalk.gray('   ' + items[i].desc.slice(0, (stdout.columns || 80) - items[i].name.length - 12))
               : '';
-            lines.push(cursor + label + desc);
+            lines.push(cur + label + desc);
           }
           stdout.write('\n' + lines.join('\n'));
-          // Remember how many lines below the input line we drew,
-          // so next render can move back up to the input line.
           lastHeight = lines.length;
         } else {
           lastHeight = 0;
         }
       } else {
-        // No dropdown — nothing below the input line to erase next time.
         lastHeight = 0;
       }
     };
@@ -139,16 +138,8 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
       return SLASH_COMMANDS.filter((c) => c.name.startsWith(buffer));
     };
 
-    const showDropdown = (): void => {
-      dropdownVisible = true;
-      dropdownIdx = 0;
-      render();
-    };
-
-    const hideDropdown = (): void => {
-      dropdownVisible = false;
-      render();
-    };
+    const showDropdown = (): void => { dropdownVisible = true; dropdownIdx = 0; render(); };
+    const hideDropdown = (): void => { dropdownVisible = false; render(); };
 
     const selectDropdownItem = (): void => {
       const items = getFilteredCommands();
@@ -156,8 +147,8 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
         const selected = items[dropdownIdx].name;
         dropdownVisible = false;
         lastHeight = 0;
-        stdout.write('\r\x1B[K'); // clear line
-        stdout.write('\x1B[?25h'); // show cursor
+        stdout.write('\r\x1B[K');
+        stdout.write('\x1B[?25h');
         stdin.setRawMode(false);
         stdin.pause();
         history.push(selected);
@@ -170,19 +161,14 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
       dropdownVisible = false;
       lastHeight = 0;
       stdout.write('\n');
-      stdout.write('\x1B[?25h'); // show cursor
+      stdout.write('\x1B[?25h');
       stdin.setRawMode(false);
       stdin.pause();
 
       if (text === '/') {
-        // Show slash command selector on Enter with just "/"
         void showSlashCommandSelector().then((selected) => {
-          if (selected) {
-            history.push(selected);
-            resolve_p({ text: selected, cancelled: false });
-          } else {
-            resolve_p({ text: '', cancelled: false });
-          }
+          if (selected) { history.push(selected); resolve_p({ text: selected, cancelled: false }); }
+          else resolve_p({ text: '', cancelled: false });
         });
         return;
       }
@@ -205,98 +191,67 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
         return;
       }
 
-      // Escape — cancel dropdown or clear buffer
+      // Bare Escape — cancel dropdown or clear buffer
       if (key === '\x1B') {
-        if (dropdownVisible) {
-          hideDropdown();
-          return;
-        }
-        // Clear buffer on bare Escape
-        buffer = '';
-        cursorPos = 0;
-        historyIdx = history.length;
+        if (dropdownVisible) { hideDropdown(); return; }
+        cpBuf = []; syncBuffer(); cursorPos = 0; historyIdx = history.length;
         render();
         return;
       }
 
-      // Arrow keys come as escape sequences: \x1B[A, \x1B[B, etc.
+      // Arrow keys
       if (key === '\x1B[A') {
-        // Up arrow
         if (dropdownVisible) {
           const items = getFilteredCommands();
           dropdownIdx = (dropdownIdx - 1 + items.length) % items.length;
-          render();
-          return;
+          render(); return;
         }
-        // History navigation
         if (historyIdx > 0) {
           historyIdx--;
-          buffer = history[historyIdx] || '';
-          cursorPos = buffer.length;
-          render();
+          cpBuf = [...(history[historyIdx] ?? '')];
+          syncBuffer(); cursorPos = cpBuf.length; render();
         }
         return;
       }
 
       if (key === '\x1B[B') {
-        // Down arrow
         if (dropdownVisible) {
           const items = getFilteredCommands();
           dropdownIdx = (dropdownIdx + 1) % items.length;
-          render();
-          return;
+          render(); return;
         }
-        // History navigation
         if (historyIdx < history.length) {
           historyIdx++;
-          buffer = historyIdx < history.length ? history[historyIdx] : '';
-          cursorPos = buffer.length;
-          render();
+          cpBuf = [...(historyIdx < history.length ? history[historyIdx] : '')];
+          syncBuffer(); cursorPos = cpBuf.length; render();
         }
         return;
       }
 
       if (key === '\x1B[C') {
-        // Right arrow — move by code points, not JS string indices
-        if (cursorPos < [...buffer].length) {
-          cursorPos++;
-          render();
-        }
+        if (cursorPos < cpBuf.length) { cursorPos++; render(); }
         return;
       }
 
       if (key === '\x1B[D') {
-        // Left arrow
-        if (cursorPos > 0) {
-          cursorPos--;
-          render();
-        }
+        if (cursorPos > 0) { cursorPos--; render(); }
         return;
       }
 
       // Enter
       if (key === '\r' || key === '\n') {
-        if (dropdownVisible) {
-          selectDropdownItem();
-          return;
-        }
-        commitInput();
-        return;
+        if (dropdownVisible) { selectDropdownItem(); return; }
+        commitInput(); return;
       }
 
       // Backspace
       if (key === '\x7F' || key === '\b') {
         if (cursorPos > 0) {
-          // Split by code points to correctly handle wide chars and surrogate pairs
-          const codePoints = [...buffer];
-          codePoints.splice(cursorPos - 1, 1);
-          buffer = codePoints.join('');
-          cursorPos--;
-          // If buffer no longer starts with '/', hide dropdown
+          cpBuf.splice(cursorPos - 1, 1);
+          syncBuffer(); cursorPos--;
           if (!buffer.startsWith('/')) {
             dropdownVisible = false;
           } else {
-            // Re-filter dropdown
             const items = getFilteredCommands();
             if (items.length === 0) dropdownVisible = false;
             else if (dropdownIdx >= items.length) dropdownIdx = items.length - 1;
@@ -306,33 +261,24 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
         return;
       }
 
-      // Tab — if dropdown visible, select item
+      // Tab
       if (key === '\t') {
-        if (dropdownVisible) {
-          selectDropdownItem();
-          return;
-        }
+        if (dropdownVisible) { selectDropdownItem(); }
         return;
       }
 
-      // Printable character input — handles ASCII, CJK, emoji, and IME batch input.
-      // Reject escape sequences (\x1B...) and control characters (< 0x20 or 0x7F).
+      // Printable input — ASCII, CJK, emoji, IME batch
       if (!key.startsWith('\x1B') && key.charCodeAt(0) >= 0x20 && key.charCodeAt(0) !== 0x7F) {
-        buffer = buffer.slice(0, cursorPos) + key + buffer.slice(cursorPos);
-        // Advance by Unicode code point count, not byte/char count (handles surrogate pairs)
-        cursorPos += [...key].length;
+        const incoming = [...key]; // split into code points
+        cpBuf.splice(cursorPos, 0, ...incoming);
+        syncBuffer(); cursorPos += incoming.length;
 
-        // Show dropdown immediately when user types "/"
         if (buffer === '/' && !dropdownVisible) {
           showDropdown();
         } else if (buffer.startsWith('/') && dropdownVisible) {
-          // Update dropdown filter
           const items = getFilteredCommands();
-          if (items.length === 0) {
-            dropdownVisible = false;
-          } else {
-            if (dropdownIdx >= items.length) dropdownIdx = 0;
-          }
+          if (items.length === 0) dropdownVisible = false;
+          else if (dropdownIdx >= items.length) dropdownIdx = 0;
           render();
         } else if (!buffer.startsWith('/') && dropdownVisible) {
           hideDropdown();
