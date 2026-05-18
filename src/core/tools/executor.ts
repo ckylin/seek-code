@@ -61,14 +61,14 @@ export async function executeTool(
     }
     const accepted = await confirmOrSkip(filePath, preview);
     if (!accepted) {
-      return { success: false, output: '', error: 'Edit rejected by user.' };
+      return { success: false, output: '', error: 'Edit rejected by user.', userRejected: true };
     }
   } else if (name === 'write_file') {
     const filePath = resolve(args.path as string);
     const content = args.content as string;
     const accepted = await confirmOrSkip(filePath, content);
     if (!accepted) {
-      return { success: false, output: '', error: 'Write rejected by user.' };
+      return { success: false, output: '', error: 'Write rejected by user.', userRejected: true };
     }
   }
 

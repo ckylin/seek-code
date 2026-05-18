@@ -176,8 +176,11 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<void> {
           stream: process.stdout,
         }).start();
 
-        const result = await executeTool(tc.function.name, tc.function.arguments, cwd);
+        // Stop spinner before executing so confirmation UIs (edit_file, write_file)
+        // can take over stdout/raw-mode without the spinner corrupting their output.
         toolSpinner.stop();
+
+        const result = await executeTool(tc.function.name, tc.function.arguments, cwd);
 
         onToolResult?.(tc.function.name, result);
         printToolResult(tc.function.name, result);
@@ -187,6 +190,10 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<void> {
           tool_call_id: tc.id,
           content: result.success ? result.output : (result.error ?? result.output),
         });
+
+        if (result.userRejected) {
+          return;
+        }
       }
 
       // continue loop — model will process tool results

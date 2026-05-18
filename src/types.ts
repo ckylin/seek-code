@@ -53,6 +53,7 @@ export interface ToolResult {
   success: boolean;
   output: string;
   error?: string;
+  userRejected?: boolean;
 }
 
 export interface Tool {

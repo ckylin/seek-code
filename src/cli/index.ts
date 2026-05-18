@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+process.title = 'Seek Code';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { loadConfig } from '../config.js';

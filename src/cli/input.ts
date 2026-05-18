@@ -91,25 +91,31 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
     stdin.resume();
     stdin.setEncoding('utf8');
 
-    // Hide cursor during input
-    stdout.write('\x1B[?25l');
-
     const prompt = chalk.blue('> ');
 
     const render = (): void => {
+      // First, erase all previously rendered content (prompt line + dropdown lines)
       if (lastHeight > 0) {
         stdout.write(`\x1B[${lastHeight}A\r\x1B[J`);
       } else {
         stdout.write('\r\x1B[K');
       }
 
+      // Write prompt + current buffer
       stdout.write(prompt + buffer);
 
-      // Cursor column = prompt width (2) + display width of chars before cursor
+      // Position cursor at the right place within the buffer.
+      // prompt has display width 2 → "> " after color codes.
       const promptLen = 2;
       const absPos = promptLen + stringWidth(cpBuf.slice(0, cursorPos).join(''));
-      stdout.write(`\r\x1B[${absPos}C`);
+      if (absPos === 0) {
+        stdout.write('\r');
+      } else {
+        stdout.write(`\r\x1B[${absPos}C`);
+      }
 
+      // Compute dropdown content before writing so we can track new height
+      let newHeight = 0;
       if (dropdownVisible) {
         const items = getFilteredCommands();
         if (items.length > 0) {
@@ -124,13 +130,13 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
             lines.push(cur + label + desc);
           }
           stdout.write('\n' + lines.join('\n'));
-          lastHeight = lines.length;
-        } else {
-          lastHeight = 0;
+          newHeight = lines.length;
         }
-      } else {
-        lastHeight = 0;
       }
+      lastHeight = newHeight;
+
+      // Show cursor after positioning so the user can see where they are
+      stdout.write('\x1B[?25h');
     };
 
     const getFilteredCommands = (): typeof SLASH_COMMANDS => {
@@ -146,8 +152,13 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
       if (items.length > 0 && dropdownIdx < items.length) {
         const selected = items[dropdownIdx].name;
         dropdownVisible = false;
+        // Clear everything we rendered (prompt + dropdown), then show cursor
+        if (lastHeight > 0) {
+          stdout.write(`\x1B[${lastHeight}A\r\x1B[J`);
+        } else {
+          stdout.write('\r\x1B[K');
+        }
         lastHeight = 0;
-        stdout.write('\r\x1B[K');
         stdout.write('\x1B[?25h');
         stdin.setRawMode(false);
         stdin.pause();
@@ -158,20 +169,31 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
 
     const commitInput = (): void => {
       const text = buffer.trim();
+
+      // Slash-command selector fallback when user types just "/" — we must NOT
+      // tear down raw mode before showing the selector, since selectFromList
+      // needs raw mode on stdin.  Close the current listener first to avoid
+      // double-listening, then hand over.
+      if (text === '/') {
+        stdin.removeListener('data', onData);
+        dropdownVisible = false;
+        lastHeight = 0;
+        stdout.write('\n');
+        // Keep raw mode on for the selector
+        void showSlashCommandSelector().then((selected) => {
+          stdout.write('\x1B[?25h');
+          if (selected) { history.push(selected); resolve_p({ text: selected, cancelled: false }); }
+          else resolve_p({ text: '', cancelled: false });
+        });
+        return;
+      }
+
       dropdownVisible = false;
       lastHeight = 0;
       stdout.write('\n');
       stdout.write('\x1B[?25h');
       stdin.setRawMode(false);
       stdin.pause();
-
-      if (text === '/') {
-        void showSlashCommandSelector().then((selected) => {
-          if (selected) { history.push(selected); resolve_p({ text: selected, cancelled: false }); }
-          else resolve_p({ text: '', cancelled: false });
-        });
-        return;
-      }
 
       if (text) history.push(text);
       resolve_p({ text, cancelled: false });
@@ -305,6 +327,11 @@ async function showSlashCommandSelector(): Promise<string | null> {
   }));
 
   const selected = await selectFromList('Slash Commands', items);
+  // selectFromList writes one \n in cleanup but does NOT erase its
+  // rendering, so we re-display the chosen command on the prompt line.
+  if (selected) {
+    process.stdout.write(chalk.blue('> ') + selected + '\n');
+  }
   return selected;
 }
 

@@ -8,6 +8,7 @@ import { resolveAtReferences } from './at-resolver.js';
 import { handleSlashCommand } from './commands.js';
 import { printBanner } from './banner.js';
 import { readMultilineInput } from './input.js';
+import { saveConfig } from '../config.js';
 import type { SeekCodeConfig, LLMProvider } from '../types.js';
 
 export async function startRepl(initialConfig: SeekCodeConfig, initialProvider: LLMProvider): Promise<void> {
@@ -47,6 +48,7 @@ export async function startRepl(initialConfig: SeekCodeConfig, initialProvider: 
       if (cmd.type === 'model_changed') {
         config = cmd.config;
         provider = new DeepSeekProvider(config);
+        await saveConfig(config).catch(() => {});
         console.log(chalk.gray(`  Active model: ${chalk.cyan(config.model)}\n`));
       }
       await loop();
