@@ -63,6 +63,16 @@ program
     }
   });
 
+program
+  .command('update')
+  .description('Check for updates and upgrade to the latest version')
+  .option('-c, --check', 'Only check for updates, do not install')
+  .option('-y, --yes', 'Skip confirmation prompt')
+  .action(async (opts: { check?: boolean; yes?: boolean }) => {
+    const { runUpdate } = await import('./update.js');
+    await runUpdate({ confirm: opts.yes ?? false, checkOnly: opts.check ?? false });
+  });
+
 program.parseAsync(process.argv).catch((err: unknown) => {
   printError(err instanceof Error ? err.message : String(err));
   process.exit(1);

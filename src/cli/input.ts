@@ -139,9 +139,9 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
 
     /** Build the status bar line */
     const buildStatusBar = (termW: number): string => {
-      const left = chalk.gray('? for shortcuts') + chalk.gray('   Alt+Enter to send');
+      const left = chalk.gray('? for shortcuts') + chalk.gray('   Ctrl+J new line   Enter to send');
       const right = contextFile
-        ? chalk.gray('↑ In ' + contextFile)
+        ? chalk.gray('\u2191 In ' + contextFile)
         : '';
       const leftW = stringWidth(left);
       const rightW = stringWidth(right);
@@ -165,7 +165,7 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
       });
 
       // ── Separator ──
-      stdout.write(chalk.gray('─'.repeat(termW)) + '\r\n');
+      stdout.write(chalk.gray('\u2500'.repeat(termW)) + '\r\n');
 
       // ── Input lines ──
       for (let i = 0; i < lines.length; i++) {
@@ -186,7 +186,7 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
           const rows: string[] = [];
           for (let i = 0; i < items.length; i++) {
             const sel = i === dropdownIdx;
-            const cur = sel ? chalk.blue('  ❯ ') : '    ';
+            const cur = sel ? chalk.blue('  \u276F ') : '    ';
             const label = sel ? chalk.bold.white(items[i].name) : chalk.white(items[i].name);
             const desc = items[i].desc
               ? chalk.gray('   ' + items[i].desc.slice(0, termW - items[i].name.length - 12))
@@ -197,11 +197,11 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
           extraRows = rows.length;
         }
       } else if (cpBuf.includes('\n')) {
-        stdout.write('\r\n' + chalk.gray('  Enter for new line   Alt+Enter to send'));
+        stdout.write('\r\n' + chalk.gray('  Ctrl+J for new line   Enter to send'));
         extraRows = 1;
       } else {
         // Bottom separator then status bar
-        stdout.write('\r\n' + chalk.gray('─'.repeat(termW)));
+        stdout.write('\r\n' + chalk.gray('\u2500'.repeat(termW)));
         stdout.write('\r\n' + buildStatusBar(termW));
         extraRows = 2;
       }
@@ -301,7 +301,17 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
         process.exit(0);
       }
 
-      // Alt+Enter — submit
+      // Ctrl+J / Shift+Enter — insert newline (like vim insert-mode Ctrl+J)
+      if (key === '\n' || key === '\x1B[13;2u' || key === '\x1B[27;2;13~') {
+        if (dropdownVisible) { hideDropdown(); return; }
+        if (buffer.startsWith('/')) { commitInput(); return; }
+        cpBuf.splice(cursor, 0, '\n');
+        syncBuffer(); cursor++;
+        render();
+        return;
+      }
+
+      // Alt+Enter / Ctrl+D — submit (alternative)
       if (key === '\x1B\r' || key === '\x1B[13;3u' || key === '\x1B[27;3;13~' || key === '\x04') {
         if (dropdownVisible) { selectDropdownItem(); return; }
         commitInput();
@@ -365,13 +375,10 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
         return;
       }
 
-      // Enter — insert newline (slash commands submit immediately)
-      if (key === '\r' || key === '\n') {
+      // Enter — send message
+      if (key === '\r') {
         if (dropdownVisible) { selectDropdownItem(); return; }
-        if (buffer.startsWith('/')) { commitInput(); return; }
-        cpBuf.splice(cursor, 0, '\n');
-        syncBuffer(); cursor++;
-        render();
+        commitInput();
         return;
       }
 
@@ -488,7 +495,7 @@ export function selectFromList(
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
         const sel = i === idx;
-        const cursor = sel ? chalk.blue('  ❯ ') : '    ';
+        const cursor = sel ? chalk.blue('  \u276F ') : '    ';
         const label = sel ? chalk.bold.white(item.label) : chalk.white(item.label);
         const desc = item.desc
           ? chalk.gray('   ' + item.desc.slice(0, (stdout.columns || 80) - item.label.length - 12))
@@ -496,7 +503,7 @@ export function selectFromList(
         out.push(cursor + label + desc);
       }
       out.push('');
-      out.push(chalk.gray('  ↑↓ navigate   Enter select   Esc cancel'));
+      out.push(chalk.gray('  \u2191\u2193 navigate   Enter select   Esc cancel'));
       return out;
     };
 
