@@ -63,7 +63,16 @@ export async function runSetup(existingConfig: SeekCodeConfig): Promise<SeekCode
   await writeFile(
     CONFIG_PATH,
     JSON.stringify(
-      { apiKey, model, maxTokens: config.maxTokens, temperature: config.temperature },
+      {
+        apiKey,
+        model,
+        maxTokens: config.maxTokens,
+        temperature: config.temperature,
+        reasoningEffort: config.reasoningEffort,
+        topP: config.topP,
+        frequencyPenalty: config.frequencyPenalty,
+        presencePenalty: config.presencePenalty,
+      },
       null,
       2,
     ),

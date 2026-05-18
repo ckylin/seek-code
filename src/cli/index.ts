@@ -2,8 +2,9 @@
 process.title = 'Seek Code';
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { loadConfig } from '../config.js';
+import { loadConfig, isReasonerModel, CHAT_CONTEXT_BUDGET, CONTEXT_BUDGET } from '../config.js';
 import { DeepSeekProvider } from '../providers/deepseek/provider.js';
+import { ContextManager } from '../core/context/manager.js';
 import { startRepl } from './repl.js';
 import { runAgentLoop } from '../core/agent/loop.js';
 import { createInterruptController } from '../utils/interrupt.js';
@@ -33,6 +34,8 @@ program
 
     if (task) {
       // One-shot mode
+      const budget = isReasonerModel(config.model) ? CONTEXT_BUDGET : CHAT_CONTEXT_BUDGET;
+      const context = new ContextManager(budget);
       const interrupt = createInterruptController();
       try {
         await runAgentLoop({
@@ -40,6 +43,7 @@ program
           cwd: process.cwd(),
           config,
           provider,
+          context,
           signal: interrupt.signal,
         });
         process.stdout.write('\n');

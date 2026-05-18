@@ -7,9 +7,7 @@ import { confirmEdit, applyEdit } from '../../utils/confirm.js';
 import type { ConfirmChoice } from '../../utils/confirm.js';
 
 // Module-level state for "yes for all" across tool calls
-// yesAll — persists forever (never resets)
 // yesAllSession — resets at the start of each new user turn
-let yesAllActive = false;
 let yesAllSessionActive = false;
 
 export function resetYesAll(): void {
@@ -17,14 +15,9 @@ export function resetYesAll(): void {
 }
 
 async function confirmOrSkip(filePath: string, newContent: string): Promise<boolean> {
-  if (yesAllActive) return true;
   if (yesAllSessionActive) return true;
 
   const choice: ConfirmChoice = await confirmEdit(filePath, newContent);
-  if (choice === 'yes_all') {
-    yesAllActive = true;
-    return true;
-  }
   if (choice === 'yes_all_session') {
     yesAllSessionActive = true;
     return true;

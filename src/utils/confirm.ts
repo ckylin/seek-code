@@ -109,7 +109,7 @@ function relPath(filePath: string): string {
   return filePath.startsWith(cwd) ? filePath.slice(cwd.length).replace(/^[\\/]/, '') : filePath;
 }
 
-export type ConfirmChoice = 'yes' | 'yes_all' | 'yes_all_session' | 'no';
+export type ConfirmChoice = 'yes' | 'yes_all_session' | 'no';
 
 // ── Arrow-key selector for confirm choices ──────────────────────────────────
 
@@ -200,8 +200,7 @@ function selectFromList(
 async function promptConfirm(): Promise<ConfirmChoice> {
   const items: SelectorItem[] = [
     { value: 'yes', label: 'Yes — 接受这次修改' },
-    { value: 'yes_all', label: 'Yes for all — 所有类似修改都自动接受（永久）' },
-    { value: 'yes_all_session', label: 'Yes for all in this session — 本次会话中所有类似修改都自动接受' },
+    { value: 'yes_all_session', label: 'Yes for all — 本次会话中所有类似修改都自动接受' },
     { value: 'no', label: 'No — 拒绝这次修改' },
   ];
 

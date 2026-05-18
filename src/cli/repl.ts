@@ -8,29 +8,28 @@ import { resolveAtReferences } from './at-resolver.js';
 import { handleSlashCommand } from './commands.js';
 import { printBanner } from './banner.js';
 import { readMultilineInput } from './input.js';
-import { saveConfig } from '../config.js';
+import { saveConfig, isReasonerModel, CONTEXT_BUDGET, CHAT_CONTEXT_BUDGET } from '../config.js';
 import type { SeekCodeConfig, LLMProvider } from '../types.js';
 
 export async function startRepl(initialConfig: SeekCodeConfig, initialProvider: LLMProvider): Promise<void> {
   const cwd = process.cwd();
-  const context = new ContextManager(Math.floor(initialConfig.maxTokens * 7));
+  const budget = isReasonerModel(initialConfig.model) ? CONTEXT_BUDGET : CHAT_CONTEXT_BUDGET;
+  const context = new ContextManager(budget);
 
   let config = initialConfig;
   let provider: LLMProvider = initialProvider;
 
+  // Fallback: if SIGINT fires outside raw-mode input (e.g. during agent run
+  // when the interrupt controller has already been cleaned up), exit cleanly.
+  process.on('SIGINT', () => {
+    process.stdout.write(chalk.yellow('\nInterrupted.\n'));
+    process.exit(0);
+  });
+
   printBanner(config.model);
 
   const loop = async (): Promise<void> => {
-    let result;
-    try {
-      result = await readMultilineInput(cwd);
-    } catch (err) {
-      if ((err as Error)?.name === 'AbortError') {
-        process.stdout.write(chalk.yellow('Interrupted.\n'));
-        process.exit(0);
-      }
-      throw err;
-    }
+    const result = await readMultilineInput(cwd);
 
     if (result.cancelled) { await loop(); return; }
 
@@ -48,6 +47,11 @@ export async function startRepl(initialConfig: SeekCodeConfig, initialProvider: 
       if (cmd.type === 'model_changed') {
         config = cmd.config;
         provider = new DeepSeekProvider(config);
+
+        // Adjust context budget when switching between chat/reasoner
+        const newBudget = isReasonerModel(config.model) ? CONTEXT_BUDGET : CHAT_CONTEXT_BUDGET;
+        context.setTokenBudget(newBudget);
+
         await saveConfig(config).catch(() => {});
         console.log(chalk.gray(`  Active model: ${chalk.cyan(config.model)}\n`));
       }
@@ -66,7 +70,6 @@ export async function startRepl(initialConfig: SeekCodeConfig, initialProvider: 
     try {
       process.stdout.write('\n');
       await runAgentLoop({ task, cwd, config, provider, context, signal: interrupt.signal });
-      process.stdout.write('\n');
     } catch (err) {
       if ((err as Error)?.name === 'AbortError' || interrupt.signal.aborted) {
         process.stdout.write(chalk.yellow('\nInterrupted.\n'));

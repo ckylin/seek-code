@@ -4,7 +4,7 @@
   <img src="./assets/logo.png" alt="Seek Code Logo" width="50%" />
 </p>
 
-> An AI-powered CLI coding assistant for the terminal — built on DeepSeek, extensible to any LLM.
+> An AI-powered CLI coding assistant for the terminal — built on DeepSeek.
 
 [![npm version](https://img.shields.io/npm/v/seekcode.svg)](https://www.npmjs.com/package/seekcode)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -27,10 +27,9 @@ seekcode "refactor the auth module to use async/await"
 
 - **🤖 Agentic coding** — Seek Code can read files, edit code, run shell commands, search codebase, and iterate autonomously on multi-step tasks using a ReAct (Reasoning + Acting) loop
 - **📂 Codebase-aware** — understands your project structure, imports, and conventions via `@` file references and project guide files (`SEEKCODE.md` / `CLAUDE.md`)
-- **🔌 Multi-model support** — ships with DeepSeek V4 Flash & Pro; designed to plug in Doubao, Kimi, OpenAI-compatible, and other providers with minimal config
+- **🔌 DeepSeek powered** — ships with DeepSeek Chat, V4 Flash & V4 Pro models
 - **🛠️ Tool use** — 6 built-in tools: file read/write/edit, shell execution, directory listing, and code search — with diff preview and user confirmation for destructive operations
-- **⚡ Streaming output** — real-time token streaming with reasoning visibility for a responsive terminal experience
-- **🧩 Extensible provider system** — add new LLM backends by implementing a single `LLMProvider` interface
+- **⚡ Streaming output** — real-time token streaming with Markdown rendering and reasoning visibility for a responsive terminal experience
 - **📎 @-references** — inject file contents, directory listings, or web page content directly into your prompt with `@file.ts`, `@src/`, or `@https://example.com`
 - **🎯 Slash commands** — `/init` to auto-generate project guide, `/model` to switch models, `/compact` to compress conversation history, and more
 - **🔒 Safe by default** — destructive operations (write/edit) show a diff preview and require user confirmation before applying
@@ -143,7 +142,7 @@ Seek Code is configured via environment variables or a `~/.seekcode/config.json`
 | Variable | Description | Default |
 |---|---|---|
 | `DEEPSEEK_API_KEY` | DeepSeek API key | — |
-| `SEEKCODE_MODEL` | Model ID to use | `deepseek-v4-flash` |
+| `SEEKCODE_MODEL` | Model ID to use | `deepseek-v4-pro` |
 | `SEEKCODE_PROVIDER` | LLM provider | `deepseek` |
 | `SEEKCODE_MAX_TOKENS` | Max tokens per response | `8192` |
 | `SEEKCODE_TEMPERATURE` | Response temperature | `0.2` |
@@ -154,11 +153,9 @@ Seek Code is configured via environment variables or a `~/.seekcode/config.json`
 ```json
 {
   "apiKey": "sk-xxxxxxxx",
-  "provider": "deepseek",
   "model": "deepseek-v4-pro",
   "maxTokens": 8192,
-  "temperature": 0.2,
-  "baseURL": "https://api.deepseek.com"
+  "temperature": 0.2
 }
 ```
 
@@ -166,38 +163,11 @@ The config file is auto-generated on first run via the setup wizard. Environment
 
 ---
 
-## Supported Models & Providers
+## Supported Models
 
 | Provider | Models | Status |
 |---|---|---|
-| [DeepSeek](https://platform.deepseek.com/) | `deepseek-v4-flash`, `deepseek-v4-pro` | ✅ Supported |
-| [Doubao (豆包)](https://www.volcengine.com/product/doubao) | `doubao-pro-*` | 🔜 Planned |
-| [Kimi (Moonshot)](https://platform.moonshot.cn/) | `moonshot-v1-*` | 🔜 Planned |
-| OpenAI-compatible | Any OpenAI-format endpoint | 🔜 Planned |
-
-### Adding a provider
-
-Implement the `LLMProvider` interface and register it:
-
-```typescript
-import { LLMProvider, Message, StreamChunk, RequestOptions } from 'seekcode';
-
-export class MyProvider implements LLMProvider {
-  readonly id = 'my-provider';
-
-  async *stream(messages: Message[], options: RequestOptions): AsyncIterable<StreamChunk> {
-    // Connect to your LLM API
-    // Yield text_delta, reasoning_delta, tool_call_delta, and finish chunks
-  }
-}
-```
-
-Then wire it up in the CLI entry point (`src/cli/index.ts`):
-
-```typescript
-import { MyProvider } from '../providers/myprovider/provider.js';
-const provider = new MyProvider(config);
-```
+| [DeepSeek](https://platform.deepseek.com/) | `deepseek-chat`, `deepseek-v4-flash`, `deepseek-v4-pro` | ✅ Supported |
 
 ---
 
@@ -236,6 +206,7 @@ seekcode/
 │   ├── utils/
 │   │   ├── display.ts            # Terminal output formatting
 │   │   ├── confirm.ts            # Diff preview and user confirmation
+│   │   ├── markdown.ts           # Streaming Markdown-to-terminal renderer
 │   │   └── interrupt.ts          # SIGINT handling
 │   ├── config.ts                 # Configuration loading (env vars, config file)
 │   └── types.ts                  # Shared TypeScript types and interfaces
@@ -294,14 +265,14 @@ Tools are how the LLM interacts with the user's environment. Each tool implement
 
 | Tool | Description |
 |---|---|
-| `read_file` | Read file contents (truncated at 8000 chars) |
+| `read_file` | Read file contents (truncated at 30,000 chars) |
 | `write_file` | Write content to file (auto-creates directories) |
 | `edit_file` | Replace an exact string in a file |
 | `execute_shell` | Run a shell command (with timeout) |
 | `list_directory` | List directory tree (configurable depth) |
 | `search_files` | Search for a text pattern in files |
 
-**Safety**: Before destructive operations (`write_file`, `edit_file`), the executor shows a diff preview and asks for user confirmation with options: Yes, Yes for all (permanent), Yes for all (session), or No.
+**Safety**: Before destructive operations (`write_file`, `edit_file`), the executor shows a diff preview and asks for user confirmation with options: Yes, Yes for all (session), or No.
 
 ### Context Management (`src/core/context/manager.ts`)
 
@@ -309,11 +280,11 @@ The `ContextManager` maintains conversation history:
 
 - **Token estimation**: Uses a simple 4:1 character-to-token ratio
 - **Trimming**: When estimated tokens exceed budget, removes oldest non-system messages
-- **Budget**: Defaults to `maxTokens * 7`
+- **Budget**: Defaults to 90,000 tokens (128K context window minus room for output); 100,000 for reasoner models
 
 ### Provider System
 
-All LLM backends implement the `LLMProvider` interface. The `StreamChunk` discriminated union supports:
+The DeepSeek provider implements the `LLMProvider` interface. The `StreamChunk` discriminated union supports:
 
 - `text_delta` — incremental text output
 - `reasoning_delta` — chain-of-thought reasoning (shown as "Thinking...")

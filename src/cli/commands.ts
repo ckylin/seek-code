@@ -4,6 +4,8 @@ import chalk from 'chalk';
 import type { LLMProvider, Message, SeekCodeConfig } from '../types.js';
 import type { ContextManager } from '../core/context/manager.js';
 import { DEEPSEEK_MODELS } from './setup.js';
+import { getSessionUsage, resetSessionUsage, addUsage } from '../core/agent/loop.js';
+import { printBalanceAndUsage } from '../utils/billing.js';
 
 export type SlashCommandResult =
   | { type: 'handled' }
@@ -44,6 +46,14 @@ export async function handleSlashCommand(
     case 'model':
       return await switchModel(args, config);
 
+    case 'cost':
+      printSessionCost(config.model);
+      return { type: 'handled' };
+
+    case 'balance':
+      await printBalanceAndUsage(config.apiKey, config.baseURL, config.model);
+      return { type: 'handled' };
+
     default:
       console.log(chalk.yellow(`Unknown command: /${cmd}. Type /help for available commands.`));
       return { type: 'handled' };
@@ -59,6 +69,8 @@ ${chalk.bold('Slash Commands')}
   ${chalk.cyan('/init')}              Analyze the codebase and generate a SEEKCODE.md project guide
   ${chalk.cyan('/model')}             Switch model interactively
   ${chalk.cyan('/model <id>')}        Switch to a specific model  (e.g. /model deepseek-v4-pro)
+  ${chalk.cyan('/cost')}              Show session token usage and cost (DeepSeek pricing)
+  ${chalk.cyan('/balance')}           Show account balance, today's & this month's usage
   ${chalk.cyan('/help')}              Show this help message
   ${chalk.cyan('/clear')}             Clear conversation context
   ${chalk.cyan('/compact')}           Summarize and compress conversation history to save tokens
@@ -71,7 +83,7 @@ ${chalk.bold('@ References')}
 
 ${chalk.bold('Current')}
 
-  model: ${chalk.cyan(config.model)}
+  model: ${chalk.cyan(config.model)}${config.reasoningEffort ? chalk.gray(`  reasoning: ${config.reasoningEffort}`) : ''}
 
 ${chalk.bold('Other')}
 
@@ -80,7 +92,45 @@ ${chalk.bold('Other')}
 `);
 }
 
-// ── /model ──────────────────────────────────────────────────────────────────
+// ── /cost ───────────────────────────────────────────────────────────────────
+
+// DeepSeek pricing (USD per 1M tokens) — updated 2025
+const DEEPSEEK_PRICING: Record<string, { prompt: number; completion: number; cacheHit: number }> = {
+  'deepseek-chat':     { prompt: 0.27, completion: 1.10, cacheHit: 0.07 },
+  'deepseek-v4-flash': { prompt: 0.27, completion: 1.10, cacheHit: 0.07 },
+  'deepseek-v4-pro':   { prompt: 0.27, completion: 1.10, cacheHit: 0.07 },
+  'deepseek-reasoner': { prompt: 0.55, completion: 2.19, cacheHit: 0.14 },
+};
+
+// USD → CNY exchange rate (人民币)
+const USD_TO_CNY = 7.25;
+
+function formatDualCurrency(usdAmount: number): string {
+  const cnyAmount = usdAmount * USD_TO_CNY;
+  return chalk.yellow(`${usdAmount.toFixed(4)}`) + chalk.gray(` (¥${cnyAmount.toFixed(2)} RMB)`);
+}
+
+function printSessionCost(model: string): void {
+  const usage = getSessionUsage();
+  const pricing = DEEPSEEK_PRICING[model] ?? DEEPSEEK_PRICING['deepseek-chat'];
+
+  const inputCost = (usage.inputTokens / 1_000_000) * pricing.prompt;
+  const outputCost = (usage.outputTokens / 1_000_000) * pricing.completion;
+  const cacheSavings = (usage.cacheHitTokens / 1_000_000) * (pricing.prompt - pricing.cacheHit);
+  const totalCost = inputCost + outputCost - cacheSavings;
+
+  console.log(`
+${chalk.bold('Session Usage')}
+  ${chalk.gray('Model:')}        ${chalk.cyan(model)}
+  ${chalk.gray('Input tokens:')}  ${usage.inputTokens.toLocaleString()}${usage.cacheHitTokens > 0 ? chalk.green(`  (${usage.cacheHitTokens.toLocaleString()} cache hits)`) : ''}
+  ${chalk.gray('Output tokens:')} ${usage.outputTokens.toLocaleString()}
+  ${chalk.gray('Total tokens:')}  ${(usage.inputTokens + usage.outputTokens).toLocaleString()}
+${chalk.gray('─'.repeat(30))}
+  ${chalk.gray('Input cost:')}   ${formatDualCurrency(inputCost)}
+  ${chalk.gray('Output cost:')}  ${formatDualCurrency(outputCost)}${cacheSavings > 0 ? chalk.green(`\n  ${chalk.gray('Cache saved:')}  -${formatDualCurrency(cacheSavings)}`) : ''}
+  ${chalk.bold('Session cost:')} ${formatDualCurrency(totalCost)}
+`);
+}
 
 async function switchModel(arg: string, config: SeekCodeConfig): Promise<SlashCommandResult> {
   // /model deepseek-v4-pro  — direct switch by ID

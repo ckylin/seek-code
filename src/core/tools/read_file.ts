@@ -2,7 +2,7 @@ import { readFile as fsReadFile } from 'fs/promises';
 import { resolve } from 'path';
 import type { Tool, ToolResult } from '../../types.js';
 
-const MAX_CHARS = 8000;
+const MAX_CHARS = 30_000;
 
 export const readFileTool: Tool = {
   definition: {
