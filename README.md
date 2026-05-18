@@ -1,7 +1,7 @@
 # Seek Code
 
 <p align="center">
-  <img src="./assets/logo.png" alt="Seek Code Logo" width="100" height="100" />
+  <img src="./assets/logo.png" alt="Seek Code Logo" width="1931" height="543" />
 </p>
 
 > An AI-powered CLI coding assistant for the terminal — built on DeepSeek, extensible to any LLM.
