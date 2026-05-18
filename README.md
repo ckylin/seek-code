@@ -1,5 +1,9 @@
 # Seek Code
 
+<p align="center">
+  <img src="./logo.png" alt="Seek Code Logo" width="200" height="200" />
+</p>
+
 > An AI-powered CLI coding assistant for the terminal — built on DeepSeek, extensible to any LLM.
 
 [![npm version](https://img.shields.io/npm/v/seekcode.svg)](https://www.npmjs.com/package/seekcode)
