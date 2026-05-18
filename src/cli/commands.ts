@@ -10,6 +10,7 @@ import { printBalanceAndUsage } from '../utils/billing.js';
 export type SlashCommandResult =
   | { type: 'handled' }
   | { type: 'clear' }
+  | { type: 'config_changed'; config: SeekCodeConfig }
   | { type: 'model_changed'; config: SeekCodeConfig }
   | { type: 'not_a_command' };
 
@@ -46,6 +47,17 @@ export async function handleSlashCommand(
     case 'model':
       return await switchModel(args, config);
 
+    case 'reasoning':
+    case 'effort':
+      return switchReasoningEffort(args, config);
+
+    case 'token':
+    case 'apikey':
+      return await switchToken(args, config);
+
+    case 'config':
+      return await handleConfig(rest, config);
+
     case 'cost':
       printSessionCost(config.model);
       return { type: 'handled' };
@@ -69,6 +81,12 @@ ${chalk.bold('Slash Commands')}
   ${chalk.cyan('/init')}              Analyze the codebase and generate a SEEKCODE.md project guide
   ${chalk.cyan('/model')}             Switch model interactively
   ${chalk.cyan('/model <id>')}        Switch to a specific model  (e.g. /model deepseek-v4-pro)
+  ${chalk.cyan('/config')}            Show current configuration
+  ${chalk.cyan('/config <key> [val]')} Set a config value interactively or directly
+                        Keys: ${chalk.gray('temperature  maxtokens  topp  frequencypenalty  presencepenalty  reasoning')}
+  ${chalk.cyan('/reasoning')}         Set reasoning effort for R1 models (low/medium/high)
+  ${chalk.cyan('/effort <level>')}    Shortcut: /effort low | /effort medium | /effort high
+  ${chalk.cyan('/token [key]')}       Update your DeepSeek API key
   ${chalk.cyan('/cost')}              Show session token usage and cost (DeepSeek pricing)
   ${chalk.cyan('/balance')}           Show account balance, today's & this month's usage
   ${chalk.cyan('/help')}              Show this help message
@@ -83,7 +101,7 @@ ${chalk.bold('@ References')}
 
 ${chalk.bold('Current')}
 
-  model: ${chalk.cyan(config.model)}${config.reasoningEffort ? chalk.gray(`  reasoning: ${config.reasoningEffort}`) : ''}
+  temperature: ${chalk.cyan(String(config.temperature))}  max_tokens: ${chalk.cyan(String(config.maxTokens))}  top_p: ${chalk.cyan(String(config.topP ?? 1))}${config.reasoningEffort ? chalk.gray(`  reasoning: ${config.reasoningEffort}`) : ''}
 
 ${chalk.bold('Other')}
 
@@ -130,6 +148,356 @@ ${chalk.gray('─'.repeat(30))}
   ${chalk.gray('Output cost:')}  ${formatDualCurrency(outputCost)}${cacheSavings > 0 ? chalk.green(`\n  ${chalk.gray('Cache saved:')}  -${formatDualCurrency(cacheSavings)}`) : ''}
   ${chalk.bold('Session cost:')} ${formatDualCurrency(totalCost)}
 `);
+}
+
+async function switchReasoningEffort(
+  arg: string,
+  config: SeekCodeConfig,
+): Promise<SlashCommandResult> {
+  const validEfforts = ['low', 'medium', 'high'] as const;
+
+  if (arg && validEfforts.includes(arg as (typeof validEfforts)[number])) {
+    const effort = arg as 'low' | 'medium' | 'high';
+    console.log(
+      chalk.green(`✓ Reasoning effort set to ${chalk.bold(effort)}`) +
+      chalk.gray(' (only applies to reasoner/R1 models)'),
+    );
+    return { type: 'config_changed', config: { ...config, reasoningEffort: effort } };
+  }
+
+  // Interactive picker
+  const { selectFromList } = await import('./input.js');
+  const selected = await selectFromList(
+    'Select reasoning effort (only applies to R1/reasoner models)',
+    [
+      { value: 'low', label: 'Low', desc: 'Faster responses, less thinking' },
+      { value: 'medium', label: 'Medium', desc: 'Balanced (default)' },
+      { value: 'high', label: 'High', desc: 'Most thorough, slower responses' },
+    ],
+    config.reasoningEffort ?? 'medium',
+  );
+
+  if (!selected || selected === config.reasoningEffort) {
+    console.log(chalk.gray('Reasoning effort unchanged.'));
+    return { type: 'handled' };
+  }
+
+  console.log(chalk.green(`✓ Reasoning effort set to ${chalk.bold(selected)}`));
+  return {
+    type: 'config_changed',
+    config: { ...config, reasoningEffort: selected as 'low' | 'medium' | 'high' },
+  };
+}
+
+async function switchToken(
+  arg: string,
+  config: SeekCodeConfig,
+): Promise<SlashCommandResult> {
+  // If an argument is provided, use it directly
+  if (arg) {
+    const trimmed = arg.trim();
+    if (trimmed.length < 10) {
+      console.log(chalk.yellow('API key seems too short. Please check and try again.'));
+      return { type: 'handled' };
+    }
+    console.log(chalk.green('✓ API key updated'));
+    console.log(chalk.gray(`  Key: ${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`));
+    return { type: 'config_changed', config: { ...config, apiKey: trimmed } };
+  }
+
+  // Interactive input (readline for direct text input)
+  const readline = await import('readline');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (prompt: string): Promise<string> =>
+    new Promise((resolve) => rl.question(prompt, resolve));
+
+  console.log(chalk.gray('Enter your new DeepSeek API key (get one at https://platform.deepseek.com/api_keys):'));
+  const newKey = (await ask(chalk.bold('API Key: '))).trim();
+  rl.close();
+
+  if (!newKey) {
+    console.log(chalk.gray('API key unchanged.'));
+    return { type: 'handled' };
+  }
+
+  if (newKey.length < 10) {
+    console.log(chalk.yellow('API key seems too short. Key unchanged.'));
+    return { type: 'handled' };
+  }
+
+  console.log(chalk.green('✓ API key updated'));
+  console.log(chalk.gray(`  Key: ${newKey.slice(0, 4)}...${newKey.slice(-4)}`));
+  return { type: 'config_changed', config: { ...config, apiKey: newKey } };
+}
+
+// ── /config ─────────────────────────────────────────────────────────────────
+// /config                        — show current config
+// /config temperature [val]      — set temperature
+// /config maxtokens [val]        — set max tokens
+// /config topp [val]             — set top-p
+// /config frequencypenalty [val] — set frequency penalty
+// /config presencepenalty [val]  — set presence penalty
+// /config reasoning [level]      — set reasoning effort
+
+async function handleConfig(
+  rest: string[],
+  config: SeekCodeConfig,
+): Promise<SlashCommandResult> {
+  const sub = rest[0]?.toLowerCase();
+  const val = rest.slice(1).join(' ').trim();
+
+  switch (sub) {
+    case 'temperature':
+    case 'temp':
+      return switchTemperature(val, config);
+
+    case 'maxtokens':
+    case 'max_tokens':
+      return switchMaxTokens(val, config);
+
+    case 'topp':
+    case 'top_p':
+      return switchTopP(val, config);
+
+    case 'frequencypenalty':
+    case 'frequency_penalty':
+      return switchFrequencyPenalty(val, config);
+
+    case 'presencepenalty':
+    case 'presence_penalty':
+      return switchPresencePenalty(val, config);
+
+    case 'reasoning':
+    case 'effort':
+      return switchReasoningEffort(val, config);
+
+    default:
+      // /config with no args — show current config overview
+      if (!sub) {
+        printConfigOverview(config);
+        return { type: 'handled' };
+      }
+      console.log(
+        chalk.yellow(`Unknown config key: ${sub}\n`) +
+        chalk.gray('Available: temperature, maxtokens, topp, frequencypenalty, presencepenalty, reasoning'),
+      );
+      return { type: 'handled' };
+  }
+}
+
+function printConfigOverview(config: SeekCodeConfig): void {
+  console.log(`
+${chalk.bold('Current Configuration')}
+
+  ${chalk.gray('temperature:')}        ${chalk.cyan(String(config.temperature))}
+  ${chalk.gray('max_tokens:')}         ${chalk.cyan(String(config.maxTokens))}
+  ${chalk.gray('top_p:')}              ${chalk.cyan(String(config.topP ?? '1'))}
+  ${chalk.gray('frequency_penalty:')}  ${chalk.cyan(String(config.frequencyPenalty ?? '0'))}
+  ${chalk.gray('presence_penalty:')}   ${chalk.cyan(String(config.presencePenalty ?? '0'))}
+  ${chalk.gray('reasoning_effort:')}   ${chalk.cyan(config.reasoningEffort ?? 'medium')}
+
+${chalk.gray('Use /config <key> <value> to change a setting, e.g. /config temperature 0.8')}
+`);
+}
+
+// ── /temperature (via /config temperature) ──────────────────────────────────
+
+async function switchTemperature(
+  arg: string,
+  config: SeekCodeConfig,
+): Promise<SlashCommandResult> {
+  if (arg) {
+    const val = parseFloat(arg);
+    if (isNaN(val) || val < 0 || val > 2) {
+      console.log(chalk.yellow('Temperature must be a number between 0 and 2.'));
+      return { type: 'handled' };
+    }
+    console.log(chalk.green(`✓ Temperature set to ${chalk.bold(String(val))}`));
+    return { type: 'config_changed', config: { ...config, temperature: val } };
+  }
+
+  const { selectFromList } = await import('./input.js');
+  const selected = await selectFromList(
+    'Select temperature (0 = deterministic, 1 = balanced, 2 = creative)',
+    [
+      { value: '0', label: '0.0', desc: 'Deterministic, consistent output' },
+      { value: '0.2', label: '0.2', desc: 'Mostly deterministic (default)' },
+      { value: '0.5', label: '0.5', desc: 'Balanced' },
+      { value: '0.8', label: '0.8', desc: 'More creative' },
+      { value: '1.0', label: '1.0', desc: 'Creative' },
+      { value: '1.5', label: '1.5', desc: 'Very creative' },
+      { value: '2.0', label: '2.0', desc: 'Maximum creativity' },
+    ],
+    String(config.temperature),
+  );
+
+  if (!selected || parseFloat(selected) === config.temperature) {
+    console.log(chalk.gray('Temperature unchanged.'));
+    return { type: 'handled' };
+  }
+
+  const val = parseFloat(selected);
+  console.log(chalk.green(`✓ Temperature set to ${chalk.bold(String(val))}`));
+  return { type: 'config_changed', config: { ...config, temperature: val } };
+}
+
+// ── /maxtokens ──────────────────────────────────────────────────────────────
+
+async function switchMaxTokens(
+  arg: string,
+  config: SeekCodeConfig,
+): Promise<SlashCommandResult> {
+  if (arg) {
+    const val = parseInt(arg, 10);
+    if (isNaN(val) || val < 256 || val > 65536) {
+      console.log(chalk.yellow('Max tokens must be an integer between 256 and 65536.'));
+      return { type: 'handled' };
+    }
+    console.log(chalk.green(`✓ Max tokens set to ${chalk.bold(String(val))}`));
+    return { type: 'config_changed', config: { ...config, maxTokens: val } };
+  }
+
+  const { selectFromList } = await import('./input.js');
+  const selected = await selectFromList(
+    'Select max tokens per response',
+    [
+      { value: '1024', label: '1024', desc: 'Short responses' },
+      { value: '2048', label: '2048', desc: 'Medium responses' },
+      { value: '4096', label: '4096', desc: 'Standard length' },
+      { value: '8192', label: '8192', desc: 'Long responses (default)' },
+      { value: '16384', label: '16384', desc: 'Very long responses' },
+      { value: '32768', label: '32768', desc: 'Maximum length responses' },
+    ],
+    String(config.maxTokens),
+  );
+
+  if (!selected || parseInt(selected, 10) === config.maxTokens) {
+    console.log(chalk.gray('Max tokens unchanged.'));
+    return { type: 'handled' };
+  }
+
+  const val = parseInt(selected, 10);
+  console.log(chalk.green(`✓ Max tokens set to ${chalk.bold(String(val))}`));
+  return { type: 'config_changed', config: { ...config, maxTokens: val } };
+}
+
+// ── /topp ───────────────────────────────────────────────────────────────────
+
+async function switchTopP(
+  arg: string,
+  config: SeekCodeConfig,
+): Promise<SlashCommandResult> {
+  if (arg) {
+    const val = parseFloat(arg);
+    if (isNaN(val) || val < 0 || val > 1) {
+      console.log(chalk.yellow('Top-p must be a number between 0 and 1.'));
+      return { type: 'handled' };
+    }
+    console.log(chalk.green(`✓ Top-p set to ${chalk.bold(String(val))}`));
+    return { type: 'config_changed', config: { ...config, topP: val } };
+  }
+
+  const { selectFromList } = await import('./input.js');
+  const selected = await selectFromList(
+    'Select top-p (nucleus sampling)',
+    [
+      { value: '1', label: '1.0', desc: 'Consider all tokens (default)' },
+      { value: '0.9', label: '0.9', desc: 'Top 90% probability mass' },
+      { value: '0.8', label: '0.8', desc: 'Top 80%' },
+      { value: '0.7', label: '0.7', desc: 'Top 70%' },
+      { value: '0.5', label: '0.5', desc: 'Top 50% (more focused)' },
+    ],
+    config.topP !== undefined ? String(config.topP) : '1',
+  );
+
+  if (!selected || (config.topP !== undefined && parseFloat(selected) === config.topP)) {
+    console.log(chalk.gray('Top-p unchanged.'));
+    return { type: 'handled' };
+  }
+
+  const val = parseFloat(selected);
+  console.log(chalk.green(`✓ Top-p set to ${chalk.bold(String(val))}`));
+  return { type: 'config_changed', config: { ...config, topP: val } };
+}
+
+// ── /frequencypenalty ───────────────────────────────────────────────────────
+
+async function switchFrequencyPenalty(
+  arg: string,
+  config: SeekCodeConfig,
+): Promise<SlashCommandResult> {
+  if (arg) {
+    const val = parseFloat(arg);
+    if (isNaN(val) || val < -2 || val > 2) {
+      console.log(chalk.yellow('Frequency penalty must be a number between -2 and 2.'));
+      return { type: 'handled' };
+    }
+    console.log(chalk.green(`✓ Frequency penalty set to ${chalk.bold(String(val))}`));
+    return { type: 'config_changed', config: { ...config, frequencyPenalty: val } };
+  }
+
+  const { selectFromList } = await import('./input.js');
+  const selected = await selectFromList(
+    'Select frequency penalty (-2 = encourage repetition, 2 = discourage)',
+    [
+      { value: '0', label: '0.0', desc: 'No penalty (default)' },
+      { value: '0.3', label: '0.3', desc: 'Slight repetition reduction' },
+      { value: '0.6', label: '0.6', desc: 'Moderate repetition reduction' },
+      { value: '1.0', label: '1.0', desc: 'Strong repetition reduction' },
+      { value: '1.5', label: '1.5', desc: 'Very strong reduction' },
+      { value: '2.0', label: '2.0', desc: 'Maximum reduction' },
+    ],
+    config.frequencyPenalty !== undefined ? String(config.frequencyPenalty) : '0',
+  );
+
+  if (!selected || (config.frequencyPenalty !== undefined && parseFloat(selected) === config.frequencyPenalty)) {
+    console.log(chalk.gray('Frequency penalty unchanged.'));
+    return { type: 'handled' };
+  }
+
+  const val = parseFloat(selected);
+  console.log(chalk.green(`✓ Frequency penalty set to ${chalk.bold(String(val))}`));
+  return { type: 'config_changed', config: { ...config, frequencyPenalty: val } };
+}
+
+// ── /presencepenalty ────────────────────────────────────────────────────────
+
+async function switchPresencePenalty(
+  arg: string,
+  config: SeekCodeConfig,
+): Promise<SlashCommandResult> {
+  if (arg) {
+    const val = parseFloat(arg);
+    if (isNaN(val) || val < -2 || val > 2) {
+      console.log(chalk.yellow('Presence penalty must be a number between -2 and 2.'));
+      return { type: 'handled' };
+    }
+    console.log(chalk.green(`✓ Presence penalty set to ${chalk.bold(String(val))}`));
+    return { type: 'config_changed', config: { ...config, presencePenalty: val } };
+  }
+
+  const { selectFromList } = await import('./input.js');
+  const selected = await selectFromList(
+    'Select presence penalty (-2 = encourage same topics, 2 = encourage new topics)',
+    [
+      { value: '0', label: '0.0', desc: 'No penalty (default)' },
+      { value: '0.3', label: '0.3', desc: 'Slight topic diversity' },
+      { value: '0.6', label: '0.6', desc: 'Moderate topic diversity' },
+      { value: '1.0', label: '1.0', desc: 'Strong topic diversity' },
+      { value: '1.5', label: '1.5', desc: 'Very strong diversity' },
+      { value: '2.0', label: '2.0', desc: 'Maximum diversity' },
+    ],
+    config.presencePenalty !== undefined ? String(config.presencePenalty) : '0',
+  );
+
+  if (!selected || (config.presencePenalty !== undefined && parseFloat(selected) === config.presencePenalty)) {
+    console.log(chalk.gray('Presence penalty unchanged.'));
+    return { type: 'handled' };
+  }
+
+  const val = parseFloat(selected);
+  console.log(chalk.green(`✓ Presence penalty set to ${chalk.bold(String(val))}`));
+  return { type: 'config_changed', config: { ...config, presencePenalty: val } };
 }
 
 async function switchModel(arg: string, config: SeekCodeConfig): Promise<SlashCommandResult> {

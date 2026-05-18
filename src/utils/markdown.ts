@@ -13,13 +13,15 @@ import chalk from 'chalk';
 
 type MdState =
   | { kind: 'text' }
-  | { kind: 'code_block'; buf: string };
+  | { kind: 'code_block'; buf: string }
+  | { kind: 'table'; rows: string[] };
 
 export class MarkdownRenderer {
   private state: MdState = { kind: 'text' };
   private lineBuf = '';
   private codeBlockLang = '';
   private fenceCount = 0;
+  private pendingTableRow: string | null = null;
 
   /** Feed a text chunk and get rendered output back. */
   feed(chunk: string): string {
@@ -38,8 +40,31 @@ export class MarkdownRenderer {
 
   /** Flush any remaining buffered content. Call at end of stream. */
   flush(): string {
+    // Flush active table
+    if (this.state.kind === 'table') {
+      const out = this.renderTable(this.state.rows);
+      this.state = { kind: 'text' };
+      if (this.lineBuf) {
+        return out + '\n' + this.renderLine(this.lineBuf);
+      }
+      return out;
+    }
+
+    // Flush pending table row (was never followed by a separator)
+    if (this.pendingTableRow !== null) {
+      const pre = this.renderLine(this.pendingTableRow) + '\n';
+      this.pendingTableRow = null;
+      if (this.lineBuf) {
+        return pre + this.renderLine(this.lineBuf);
+      }
+      return pre;
+    }
+
     // Commit whatever's left in the line buffer
-    return this.commitLine();
+    if (this.lineBuf) {
+      return this.renderLine(this.lineBuf);
+    }
+    return '';
   }
 
   // ── Internal ───────────────────────────────────────────────────────────
@@ -48,38 +73,82 @@ export class MarkdownRenderer {
     const raw = this.lineBuf;
     this.lineBuf = '';
 
-    if (this.state.kind === 'text') {
-      // Detect ``` fence start
-      const fenceMatch = raw.match(/^```(\S*)$/);
-      if (fenceMatch) {
-        this.state = { kind: 'code_block', buf: '' };
-        this.codeBlockLang = fenceMatch[1] || '';
-        this.fenceCount = 0;
-        return ''; // opening fence is silent
+    // ── Code block state ───────────────────────────────────────────────
+    if (this.state.kind === 'code_block') {
+      const s = this.state;
+
+      // Detect closing ``` fence
+      if (/^```\s*$/.test(raw)) {
+        this.fenceCount++;
+        if (this.fenceCount >= 1) {
+          const out = this.formatCodeBlock(s.buf);
+          this.state = { kind: 'text' };
+          this.codeBlockLang = '';
+          this.fenceCount = 0;
+          return out + '\n';
+        }
       }
 
-      return this.renderLine(raw) + '\n';
+      // Accumulate code block content
+      if (s.buf) s.buf += '\n';
+      s.buf += raw;
+      return '';
     }
 
-    // Inside code block
-    const s = this.state as { kind: 'code_block'; buf: string };
-
-    // Detect closing ``` fence
-    if (/^```\s*$/.test(raw)) {
-      this.fenceCount++;
-      if (this.fenceCount >= 1) {
-        const out = this.formatCodeBlock(s.buf);
-        this.state = { kind: 'text' };
-        this.codeBlockLang = '';
-        this.fenceCount = 0;
-        return out + '\n';
+    // ── Table state ───────────────────────────────────────────────────
+    if (this.state.kind === 'table') {
+      if (this.isTableRow(raw)) {
+        this.state.rows.push(raw);
+        return '';
       }
+      // Table ended — render and fall through to process current line as text
+      const out = this.renderTable(this.state.rows);
+      this.state = { kind: 'text' };
+      this.lineBuf = raw;
+      return out + '\n' + this.commitLine();
     }
 
-    // Accumulate code block content
-    if (s.buf) s.buf += '\n';
-    s.buf += raw;
-    return '';
+    // ── Text state ────────────────────────────────────────────────────
+    // Detect ``` fence start
+    const fenceMatch = raw.match(/^```(\S*)$/);
+    if (fenceMatch) {
+      // Flush any pending table row before starting code block
+      let pre = '';
+      if (this.pendingTableRow !== null) {
+        pre = this.renderLine(this.pendingTableRow) + '\n';
+        this.pendingTableRow = null;
+      }
+      this.state = { kind: 'code_block', buf: '' };
+      this.codeBlockLang = fenceMatch[1] || '';
+      this.fenceCount = 0;
+      return pre; // opening fence is silent
+    }
+
+    // Table row detection
+    if (this.isTableRow(raw)) {
+      if (this.pendingTableRow !== null && this.isTableSeparator(raw)) {
+        // Confirmed: pendingTableRow is header, raw is separator
+        this.state = { kind: 'table', rows: [this.pendingTableRow, raw] };
+        this.pendingTableRow = null;
+        return '';
+      }
+      // Flush previous pending row (it wasn't a table header after all)
+      let pre = '';
+      if (this.pendingTableRow !== null) {
+        pre = this.renderLine(this.pendingTableRow) + '\n';
+      }
+      this.pendingTableRow = raw;
+      return pre;
+    }
+
+    // Not a table row — flush any pending row
+    if (this.pendingTableRow !== null) {
+      const pre = this.renderLine(this.pendingTableRow) + '\n';
+      this.pendingTableRow = null;
+      return pre + this.renderLine(raw) + '\n';
+    }
+
+    return this.renderLine(raw) + '\n';
   }
 
   // ── Line-level rendering ───────────────────────────────────────────────
@@ -167,6 +236,90 @@ export class MarkdownRenderer {
     }
 
     out += chalk.gray('└' + '─'.repeat(Math.min(maxCols - 2, 40)));
+    return out;
+  }
+
+  // ── Table rendering ────────────────────────────────────────────────────
+
+  /** Check if a trimmed line looks like a markdown table row: starts and ends with | */
+  private isTableRow(line: string): boolean {
+    const t = line.trimEnd();
+    return t.startsWith('|') && t.endsWith('|') && t.length > 2;
+  }
+
+  /** Check if a trimmed line is a table separator row: |---|:---:| etc. */
+  private isTableSeparator(line: string): boolean {
+    const t = line.trimEnd();
+    if (!t.startsWith('|') || !t.endsWith('|')) return false;
+    const cells = t.slice(1, -1).split('|');
+    if (cells.length < 1) return false;
+    return cells.every(c => /^:?-+:?$/.test(c.trim()));
+  }
+
+  /** Split a table row into cell contents */
+  private parseTableRow(row: string): string[] {
+    const trimmed = row.trimEnd();
+    return trimmed.slice(1, -1).split('|').map(c => c.trim());
+  }
+
+  /** Strip ANSI escape codes to measure visual width */
+  private stripAnsi(s: string): string {
+    return s.replace(/\x1b\[[0-9;]*m/g, '');
+  }
+
+  /** Render a buffered table (header + separator + data rows) */
+  private renderTable(rows: string[]): string {
+    // rows[0] = header, rows[1] = separator, rows[2..] = data
+    const headerRaw = this.parseTableRow(rows[0]);
+    const dataRaw = rows.slice(2).map(r => this.parseTableRow(r));
+
+    // Render inline formatting for all cells
+    const header = headerRaw.map(c => this.renderInline(c));
+    const data = dataRaw.map(row => row.map(c => this.renderInline(c)));
+
+    // Calculate visual widths (min 3 per column)
+    const colCount = header.length;
+    const widths: number[] = [];
+    for (let i = 0; i < colCount; i++) {
+      let maxW = this.stripAnsi(header[i]).length;
+      for (const row of data) {
+        const w = this.stripAnsi(row[i] ?? '').length;
+        if (w > maxW) maxW = w;
+      }
+      widths.push(Math.max(maxW, 3));
+    }
+
+    // Pad a cell to target visual width
+    const pad = (s: string, w: number): string => {
+      const visual = this.stripAnsi(s);
+      return s + ' '.repeat(w - visual.length);
+    };
+
+    const gray = chalk.gray;
+    const sep = gray(' │ ');
+    let out = '';
+
+    // Top border
+    out += gray('┌' + widths.map(w => '─'.repeat(w + 2)).join('┬') + '┐') + '\n';
+
+    // Header row (bold)
+    out += gray('│ ') + header.map((c, i) => chalk.bold(pad(c, widths[i]))).join(sep) + gray(' │') + '\n';
+
+    // Separator
+    out += gray('├' + widths.map(w => '─'.repeat(w + 2)).join('┼') + '┤') + '\n';
+
+    // Data rows
+    for (const row of data) {
+      const cells = [];
+      for (let i = 0; i < colCount; i++) {
+        cells.push(pad(row[i] ?? '', widths[i]));
+      }
+      out += gray('│ ') + cells.join(sep) + gray(' │') + '\n';
+    }
+
+    // Bottom border
+    out += gray('└' + widths.map(w => '─'.repeat(w + 2)).join('┴') + '┘');
+
     return out;
   }
 }

@@ -67,11 +67,47 @@ export class ContextManager {
 
   private trim(): void {
     const hasSystem = this.messages[0]?.role === 'system';
+    const startIdx = hasSystem ? 1 : 0;
     // Keep system + at least the last 4 messages (user/assistant/tool pairs)
     const minMessages = hasSystem ? 5 : 4;
     while (this.estimateTokens() > this.tokenBudget && this.messages.length > minMessages) {
-      // Remove the oldest non-system message (index 1 if system exists, else index 0)
-      this.messages.splice(hasSystem ? 1 : 0, 1);
+      this.removeOldestGroup(startIdx);
+    }
+  }
+
+  /**
+   * Remove the oldest message group from the conversation, preserving
+   * assistant(tool_calls) ↔ tool message pairing required by the LLM API.
+   */
+  private removeOldestGroup(startIdx: number): void {
+    const msg = this.messages[startIdx];
+
+    if (msg && msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls) {
+      // This is an assistant message with tool calls — must remove it
+      // together with all subsequent tool response messages.
+      let removeCount = 1;
+      while (
+        startIdx + removeCount < this.messages.length &&
+        this.messages[startIdx + removeCount].role === 'tool'
+      ) {
+        removeCount++;
+      }
+      this.messages.splice(startIdx, removeCount);
+    } else if (msg && msg.role === 'tool') {
+      // Standalone tool message without preceding assistant(tool_calls) —
+      // this can happen if the assistant was already removed. Skip it
+      // to avoid breaking the stream, and also skip any contiguous tool messages.
+      let removeCount = 1;
+      while (
+        startIdx + removeCount < this.messages.length &&
+        this.messages[startIdx + removeCount].role === 'tool'
+      ) {
+        removeCount++;
+      }
+      this.messages.splice(startIdx, removeCount);
+    } else {
+      // Plain message (user, assistant without tool_calls, system) — safe to remove
+      this.messages.splice(startIdx, 1);
     }
   }
 }

@@ -18,6 +18,9 @@ export interface SelectorItem {
 const SLASH_COMMANDS = [
   { name: '/init',    desc: 'Analyze codebase and generate SEEK.md' },
   { name: '/model',   desc: 'Switch model' },
+  { name: '/config',  desc: 'View or change config (temperature, topp, etc.)' },
+  { name: '/reasoning', desc: 'Set reasoning effort (low/medium/high)' },
+  { name: '/token',   desc: 'Update API key' },
   { name: '/compact', desc: 'Compress conversation history' },
   { name: '/clear',   desc: 'Clear conversation context' },
   { name: '/cost',    desc: 'Show session token usage and cost' },
@@ -397,7 +400,23 @@ export function readMultilineInput(cwd = process.cwd()): Promise<InputResult> {
 
       // Printable input — ASCII, CJK, emoji, IME batch
       if (!key.startsWith('\x1B') && key.charCodeAt(0) >= 0x20 && key.charCodeAt(0) !== 0x7F) {
-        const incoming = [...key];
+        let incoming = [...key];
+
+        // Normalize Windows line endings from paste: \r\n → \n, then lone \r → \n
+        // Without this, \r corrupts terminal cursor tracking and causes the input
+        // box to drift upward on backspace (see render's linesAboveCursor calc).
+        const normalized: string[] = [];
+        for (let i = 0; i < incoming.length; i++) {
+          if (incoming[i] === '\r' && incoming[i + 1] === '\n') {
+            normalized.push('\n'); i++; // skip the \n
+          } else if (incoming[i] === '\r') {
+            normalized.push('\n');
+          } else {
+            normalized.push(incoming[i]);
+          }
+        }
+        incoming = normalized;
+
         cpBuf.splice(cursor, 0, ...incoming);
         syncBuffer(); cursor += incoming.length;
 

@@ -44,7 +44,7 @@ export async function startRepl(initialConfig: SeekCodeConfig, initialProvider: 
     // Slash commands
     if (raw.startsWith('/')) {
       const cmd = await handleSlashCommand(raw, cwd, config, provider, context);
-      if (cmd.type === 'model_changed') {
+      if (cmd.type === 'model_changed' || cmd.type === 'config_changed') {
         config = cmd.config;
         provider = new DeepSeekProvider(config);
 
@@ -53,7 +53,11 @@ export async function startRepl(initialConfig: SeekCodeConfig, initialProvider: 
         context.setTokenBudget(newBudget);
 
         await saveConfig(config).catch(() => {});
-        console.log(chalk.gray(`  Active model: ${chalk.cyan(config.model)}\n`));
+        if (cmd.type === 'model_changed') {
+          console.log(chalk.gray(`  Active model: ${chalk.cyan(config.model)}\n`));
+        } else {
+          console.log(chalk.gray('  Configuration applied.\n'));
+        }
       }
       await loop();
       return;

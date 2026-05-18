@@ -159,12 +159,13 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<void> {
     const updateThinkingText = (): void => {
       const elapsed = Math.floor((Date.now() - startTime) / 1000);
       const iterInfo = iteration > 0 ? ` · iter ${iteration + 1}/${MAX_ITERATIONS}` : '';
-      thinkingSpinner.text = chalk.gray(`Thinking… (${elapsed}s · ↑ ${outputTokens} tokens${iterInfo})`);
+      thinkingSpinner.text = chalk.gray(`Thinking… (${elapsed}s · ↑ ${outputTokens} tokens${iterInfo}  Esc to cancel)`);
     };
 
     const showThinking = (): void => {
       if (!thinkingSpinner.isSpinning) {
         thinkingSpinner.start();
+        updateThinkingText();
         // Tick every second so the elapsed time updates even between chunks
         const ticker = setInterval(() => {
           if (thinkingSpinner.isSpinning) updateThinkingText();
@@ -176,7 +177,9 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<void> {
     };
 
     const hideThinking = (): void => {
-      if (thinkingSpinner.isSpinning) thinkingSpinner.stop();
+      if (thinkingSpinner.isSpinning) {
+        thinkingSpinner.stop();
+      }
     };
 
     const stream = provider.stream(context.getMessages(), {

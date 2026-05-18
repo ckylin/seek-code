@@ -42,6 +42,24 @@ export async function executeTool(
     return { success: false, output: '', error: `Invalid JSON arguments for tool ${name}: ${argsJson}` };
   }
 
+  // Validate required parameters for each tool to avoid confusing Node.js errors
+  // (e.g., path.resolve(undefined) → "paths[0] must be of type string")
+  const requiredParams: Record<string, string[]> = {
+    read_file: ['path'],
+    write_file: ['path', 'content'],
+    edit_file: ['path', 'old_string', 'new_string'],
+    execute_shell: ['command'],
+    search_files: ['pattern'],
+  };
+  const required = requiredParams[name];
+  if (required) {
+    for (const p of required) {
+      if (args[p] === undefined || args[p] === null) {
+        return { success: false, output: '', error: `Missing required parameter "${p}" for tool ${name}` };
+      }
+    }
+  }
+
   // Show diff and require confirmation before writing files
   if (name === 'edit_file') {
     const filePath = resolve(args.path as string);
