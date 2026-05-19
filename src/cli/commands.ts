@@ -6,12 +6,17 @@ import type { ContextManager } from '../core/context/manager.js';
 import { DEEPSEEK_MODELS } from './setup.js';
 import { getSessionUsage, resetSessionUsage, addUsage } from '../core/agent/loop.js';
 import { printBalanceAndUsage } from '../utils/billing.js';
+import type { Skill } from './skills.js';
+import { getGlobalSkillsDir, createSkill } from './skills.js';
 
 export type SlashCommandResult =
   | { type: 'handled' }
   | { type: 'clear' }
   | { type: 'config_changed'; config: SeekCodeConfig }
   | { type: 'model_changed'; config: SeekCodeConfig }
+  | { type: 'exit' }
+  | { type: 'skill_run'; prompt: string; system?: string }
+  | { type: 'skills_reload' }
   | { type: 'not_a_command' };
 
 export async function handleSlashCommand(
@@ -20,6 +25,7 @@ export async function handleSlashCommand(
   config: SeekCodeConfig,
   provider: LLMProvider,
   context: ContextManager,
+  skills: Skill[] = [],
 ): Promise<SlashCommandResult> {
   if (!input.startsWith('/')) return { type: 'not_a_command' };
 
@@ -28,7 +34,7 @@ export async function handleSlashCommand(
 
   switch (cmd.toLowerCase()) {
     case 'help':
-      printHelp(config);
+      printHelp(config, skills);
       return { type: 'handled' };
 
     case 'clear':
@@ -66,15 +72,38 @@ export async function handleSlashCommand(
       await printBalanceAndUsage(config.apiKey, config.baseURL, config.model);
       return { type: 'handled' };
 
-    default:
+    case 'exit':
+      return { type: 'exit' };
+
+    case 'skills':
+      return await handleSkills(rest, skills);
+
+    case 'review':
+      await reviewContext(context, config, provider);
+      return { type: 'handled' };
+
+    default: {
+      // Check if it matches a loaded skill
+      const skill = skills.find((s) => s.name.toLowerCase() === cmd.toLowerCase());
+      if (skill) {
+        const prompt = args ? `${skill.content}\n\n${args}` : skill.content;
+        return { type: 'skill_run', prompt, system: skill.system };
+      }
       console.log(chalk.yellow(`Unknown command: /${cmd}. Type /help for available commands.`));
       return { type: 'handled' };
+    }
   }
 }
 
 // ── /help ───────────────────────────────────────────────────────────────────
 
-function printHelp(config: SeekCodeConfig): void {
+function printHelp(config: SeekCodeConfig, skills: Skill[] = []): void {
+  const skillsSection = skills.length > 0
+    ? `\n${chalk.bold('Skills')}\n\n` +
+      skills.map((s) =>
+        `  ${chalk.cyan('/' + s.name)}${' '.repeat(Math.max(1, 18 - s.name.length - 1))}${s.description ? chalk.gray(` — ${s.description}`) : chalk.gray(`(${s.source})`)}`
+      ).join('\n') + '\n'
+    : '';
   console.log(`
 ${chalk.bold('Slash Commands')}
 
@@ -89,10 +118,13 @@ ${chalk.bold('Slash Commands')}
   ${chalk.cyan('/token [key]')}       Update your DeepSeek API key
   ${chalk.cyan('/cost')}              Show session token usage and cost (DeepSeek pricing)
   ${chalk.cyan('/balance')}           Show account balance, today's & this month's usage
+  ${chalk.cyan('/skills')}            List and manage skills (create, list)
+  ${chalk.cyan('/review')}            Review session changes for logic issues
   ${chalk.cyan('/help')}              Show this help message
   ${chalk.cyan('/clear')}             Clear conversation context
   ${chalk.cyan('/compact')}           Summarize and compress conversation history to save tokens
-
+  ${chalk.cyan('/exit')}              Exit Seek Code
+${skillsSection}
 ${chalk.bold('@ References')}
 
   ${chalk.cyan('@<file>')}        Inject file contents into your message  (e.g. @src/index.ts)
@@ -780,4 +812,172 @@ Rules:
 - Do not list every file — only what's architecturally significant.
 - Do not add sections that have no content.
 - Output raw Markdown only, no code fences wrapping the whole document.`;
+}
+
+
+// ── /skills ─────────────────────────────────────────────────────────────────
+// /skills              — list all loaded skills
+// /skills create <name> — interactively create a new skill in ~/.seekcode/skills/
+
+async function handleSkills(
+  rest: string[],
+  skills: Skill[],
+): Promise<SlashCommandResult> {
+  const sub = rest[0]?.toLowerCase();
+  const name = rest.slice(1).join(' ').trim();
+
+  if (sub === 'create') {
+    if (!name) {
+      console.log(chalk.yellow('Usage: /skills create <name>'));
+      console.log(chalk.gray('Example: /skills create my-skill'));
+      return { type: 'handled' };
+    }
+
+    const readline = await import('readline');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (prompt: string): Promise<string> =>
+      new Promise<string>((resolve) => rl.question(prompt, resolve));
+
+    console.log(chalk.gray(`\nCreating skill "${chalk.cyan(name)}" in ${chalk.gray(getGlobalSkillsDir())}\n`));
+    console.log(chalk.gray('Enter a short description (optional, press Enter to skip):'));
+    const desc = (await ask(chalk.bold('Description: '))).trim();
+
+    console.log(chalk.gray('\nEnter the skill content (instructions/prompt that will be sent to the model):'));
+    console.log(chalk.gray('Type your content and press Enter. Multi-line is supported —'));
+    console.log(chalk.gray('just keep typing and press Enter on an empty line to finish.\n'));
+
+    const lines = [];
+    while (true) {
+      const line = await ask('');
+      if (line === '') break;
+      lines.push(line);
+    }
+    rl.close();
+
+    const content = lines.join('\n').trim();
+    if (!content) {
+      console.log(chalk.yellow('Skill content cannot be empty. Aborted.'));
+      return { type: 'handled' };
+    }
+
+    try {
+      const fileName = await createSkill(name, desc || '', content);
+      console.log(chalk.green(`\n✓ Skill "${name}" created: ${fileName}`));
+      console.log(chalk.gray(`  Directory: ${getGlobalSkillsDir()}`));
+      console.log(chalk.gray(`  Use as /${name} immediately.`));
+      return { type: 'skills_reload' };
+    } catch (err) {
+      console.log(chalk.red(`\nFailed to create skill: ${err instanceof Error ? err.message : String(err)}`));
+    }
+
+    return { type: 'handled' };
+  }
+
+  // /skills — list all skills
+  if (skills.length === 0) {
+    console.log(`\n${chalk.gray('No skills loaded.')}`);
+    console.log(chalk.gray(`Create one with ${chalk.cyan('/skills create <name>')}`));
+    console.log(chalk.gray(`Or add .md files to ${chalk.gray(getGlobalSkillsDir())}`));
+    console.log(chalk.gray(`Project skills: ${chalk.gray('.seekcode/skills/')}`));
+    return { type: 'handled' };
+  }
+
+  console.log(`\n${chalk.bold('Skills')}\n`);
+
+  const maxNameLen = Math.max(...skills.map((s) => s.name.length));
+  for (const skill of skills) {
+    const sourceLabel = skill.source === 'project' ? chalk.blue('[project]') : chalk.gray('[global]');
+    const desc = skill.description ? chalk.gray(` — ${skill.description}`) : '';
+    const namePadded = chalk.cyan('/' + skill.name.padEnd(maxNameLen));
+    console.log(`  ${namePadded}  ${sourceLabel}${desc}`);
+  }
+
+  console.log(`\n${chalk.gray('Use /<skill-name> to run a skill')}`);
+  console.log(chalk.gray(`Create: ${chalk.cyan('/skills create <name>')}`));
+  console.log(chalk.gray(`Global dir: ${chalk.gray(getGlobalSkillsDir())}`));
+  console.log(chalk.gray(`Project dir: ${chalk.gray('.seekcode/skills/')}`));
+
+  return { type: 'handled' };
+}
+
+// ── /review ──────────────────────────────────────────────────────────────────
+
+async function reviewContext(
+  context: ContextManager,
+  config: SeekCodeConfig,
+  provider: LLMProvider,
+): Promise<void> {
+  const messages = context.getMessages();
+  const nonSystem = messages.filter((m) => m.role !== 'system');
+
+  if (nonSystem.length < 2) {
+    console.log(chalk.gray('No conversation to review yet.'));
+    return;
+  }
+
+  console.log(chalk.bold('\n🔍 Reviewing session changes for logic issues…\n'));
+
+  const reviewPrompt = messages
+    .map((m) => {
+      const role = m.role.toUpperCase();
+      if ('tool_calls' in m && m.tool_calls) {
+        const calls = m.tool_calls.map(tc =>
+          `  → ${tc.function.name}(${tc.function.arguments})`
+        ).join('\n');
+        return `${role}: [tool calls]\n${calls}`;
+      }
+      const content = 'content' in m && m.content ? String(m.content) : '';
+      return `${role}: ${content}`;
+    })
+    .join('\n\n');
+
+  const reviewMessages: Message[] = [
+    {
+      role: 'system',
+      content: `You are an expert code reviewer. Analyze the following conversation log containing code changes (write_file, edit_file tool calls). Focus on:
+- Logical errors or inconsistencies in the code changes
+- Potential bugs, edge cases, or race conditions
+- Missing error handling
+- Type safety issues
+- Breaking changes to existing APIs or interfaces
+- Performance concerns
+
+Provide a structured review:
+1. **Critical Issues** — bugs that would cause runtime errors or data loss
+2. **Logic Issues** — flaws in reasoning, incorrect assumptions, edge cases missed
+3. **Style / Best Practices** — deviations from conventions, minor improvements
+4. **Summary** — overall assessment
+
+If no issues are found, clearly state that the changes look correct. Be specific — reference exact file paths and line content from the conversation.`,
+    },
+    {
+      role: 'user',
+      content: `Review this conversation session for logic issues:\n\n${reviewPrompt}`,
+    },
+  ];
+
+  process.stdout.write(chalk.gray('Analyzing…'));
+
+  let review = '';
+  try {
+    const stream = provider.stream(reviewMessages, {
+      model: config.model,
+      maxTokens: 4096,
+      temperature: 0.2,
+    });
+    for await (const chunk of stream) {
+      if (chunk.type === 'text_delta') {
+        if (!review) {
+          process.stdout.write('\r' + ' '.repeat(20) + '\r');
+        }
+        review += chunk.text;
+        process.stdout.write(chunk.text);
+      }
+    }
+  } catch (err) {
+    console.log(chalk.red('\nFailed to review: ' + (err instanceof Error ? err.message : String(err))));
+    return;
+  }
+
+  console.log('\n');
 }

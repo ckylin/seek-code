@@ -86,11 +86,13 @@ npm link
 seekcode/
 ├── src/
 │   ├── cli/                  # CLI 入口、REPL、参数解析
-│   │   ├── index.ts          # 入口（基于 commander 的 CLI）
+│   │   ├── index.ts          # 入口（commander 驱动的 CLI）
 │   │   ├── repl.ts           # 交互式 REPL 循环
 │   │   ├── input.ts          # 多行输入、Tab 补全、列表选择器
 │   │   ├── commands.ts       # 斜杠命令（/help, /model, /init 等）
 │   │   ├── setup.ts          # 首次运行设置向导
+│   │   ├── skills.ts         # 技能加载和管理
+│   │   ├── update.ts         # 版本检查和升级
 │   │   ├── banner.ts         # ASCII 艺术横幅
 │   │   └── at-resolver.ts    # @文件/@URL 引用展开
 │   ├── core/
@@ -107,7 +109,7 @@ seekcode/
 │   │   │   └── search_files.ts
 │   │   └── context/
 │   │       ├── manager.ts    # 上下文窗口管理（Token 预算、裁剪）
-│   │       └── project-guide.ts  # 加载 SEEK.md / CLAUDE.md 项目指南
+│   │       └── project-guide.ts  # 加载 SEEKCODE.md / CLAUDE.md 项目指南
 │   ├── providers/
 │   │   └── deepseek/
 │   │       ├── provider.ts   # DeepSeek LLM 提供商实现
@@ -115,6 +117,8 @@ seekcode/
 │   ├── utils/
 │   │   ├── display.ts        # 终端输出格式化
 │   │   ├── confirm.ts        # Diff 预览和用户确认
+│   │   ├── billing.ts        # 余额/用量查询和费用展示
+│   │   ├── markdown.ts       # 流式 Markdown 转终端渲染器
 │   │   └── interrupt.ts      # SIGINT 处理
 │   ├── config.ts             # 配置加载（环境变量、配置文件）
 │   └── types.ts              # 共享 TypeScript 类型和接口
@@ -128,6 +132,7 @@ seekcode/
 ├── package.json
 ├── tsconfig.json
 ├── vitest.config.ts
+├── SEEKCODE.md               # Seek Code 项目指南
 ├── CLAUDE.md                 # AI 编码助手项目指南
 └── README.md
 ```
@@ -241,7 +246,7 @@ console.log('[调试] 工具参数:', params);
 
 代理循环（`src/core/agent/loop.ts`）是 Seek Code 的核心。调试代理循环时，可以关注以下关键点：
 
-1. **系统提示构建**：检查系统提示是否正确包含项目指南（SEEK.md/CLAUDE.md）内容
+1. **系统提示构建**：检查系统提示是否正确包含项目指南（SEEKCODE.md/CLAUDE.md）内容
 2. **消息历史**：在 `ContextManager` 中打印当前消息列表，确认上下文裁剪是否正常
 3. **工具调用解析**：检查 LLM 返回的 tool_call 参数是否被正确解析
 4. **流式输出**：确认 text_delta、reasoning_delta、tool_call_delta 等流式块是否正确处理
@@ -429,14 +434,14 @@ describe('read_file', () => {
 
 | 工具 | 描述 |
 |---|---|
-| read_file | 读取文件内容（截断至 8000 字符） |
+| read_file | 读取文件内容（截断至 30,000 字符） |
 | write_file | 写入内容到文件（自动创建目录） |
 | edit_file | 替换文件中的精确字符串 |
 | execute_shell | 运行 shell 命令（带超时） |
 | list_directory | 列出目录树（可配置深度） |
 | search_files | 在文件中搜索文本模式 |
 
-**安全性**：在破坏性操作（write_file、edit_file）之前，执行器会显示 diff 预览并请求用户确认。
+**安全性**：在破坏性操作（write_file、edit_file、execute_shell）之前，执行器会显示 diff 预览并请求用户确认。
 
 ### 上下文管理（src/core/context/manager.ts）
 
@@ -444,7 +449,7 @@ ContextManager 维护对话历史：
 
 - **Token 估算**：使用简单的 4:1 字符与 Token 比率。
 - **裁剪**：当估算的 Token 数超过预算时，移除最旧的非系统消息。
-- **预算**：默认为 maxTokens * 7。
+- **预算**：聊天模型默认 90,000 Token（128K 上下文窗口减去输出空间）；推理模型 100,000 Token（1M 上下文窗口）。
 
 ### 提供商系统
 
@@ -589,13 +594,19 @@ Seek Code 在交互式 REPL 中提供了一组斜杠命令，实现在 `src/cli/
 
 | 命令 | 描述 |
 |---|---|
-| `/help` | 显示可用命令 |
-| `/model <名称>` | 切换活跃的 LLM 模型 |
-| `/provider <ID>` | 切换活跃的 LLM 提供商 |
-| `/init` | 重新运行设置向导以配置 API 密钥 |
+| `/help` | 显示可用命令和当前配置 |
+| `/model <名称>` | 切换活跃的 LLM 模型（无参数时交互式选择） |
+| `/init` | 分析代码库并生成 SEEKCODE.md 项目指南 |
 | `/clear` | 清除对话历史 |
-| `/exit` 或 `/quit` | 退出 REPL |
+| `/compact` | 总结并压缩对话历史以节省 Token |
+| `/review` | 审查会话变更中的逻辑问题 |
 | `/cost` | 显示当前会话的 Token 使用量和预估费用 |
+| `/balance` | 显示账户余额和用量（今日 / 本月） |
+| `/config` | 显示或更改配置设置 |
+| `/reasoning` / `/effort` | 设置 R1 模型的推理强度（low/medium/high） |
+| `/token` | 更新你的 DeepSeek API 密钥 |
+| `/skills` | 列出和管理技能（创建、列表） |
+| `/exit` | 退出 REPL |
 
 ---
 
@@ -644,8 +655,9 @@ seekcode "总结 @https://example.com/docs/api"
 
 1. **检测缺少配置** — 检查是否设置了 `DEEPSEEK_API_KEY` 或存在 `~/.seekcode/config.json`
 2. **提示输入 API 密钥** — 要求用户输入 DeepSeek API 密钥
-3. **保存配置** — 将密钥写入 `~/.seekcode/config.json`
-4. **验证密钥** — 进行测试 API 调用以确认密钥有效
+3. **模型选择** — 让用户从可用的 DeepSeek 模型中选择
+4. **保存配置** — 写入 `~/.seekcode/config.json`
+5. **验证密钥** — 进行测试 API 调用以确认密钥有效
 
 ### 跳过向导
 
@@ -660,18 +672,18 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 
 ## 项目指南系统
 
-Seek Code 会自动加载项目根目录中的 `SEEK.md` 或 `CLAUDE.md` 文件作为项目级指导，实现在 `src/core/context/project-guide.ts`。
+Seek Code 会自动加载项目根目录中的 `SEEKCODE.md` 或 `CLAUDE.md` 文件作为项目级指导，实现在 `src/core/context/project-guide.ts`。
 
 ### 工作原理
 
-1. 启动时，Seek Code 在当前工作目录查找 `SEEK.md` 或 `CLAUDE.md`
-2. 如果找到，文件内容会被附加到系统提示中
+1. 启动时，Seek Code 在当前工作目录查找 `SEEKCODE.md` 或 `CLAUDE.md`
+2. 如果找到，文件内容会被前置到系统提示中
 3. 这样每个项目都可以为 AI 助手定义自定义指令
 
-### 示例 `SEEK.md`
+### 示例 `SEEKCODE.md`
 
 ```markdown
-# SEEK.md
+# SEEKCODE.md
 
 该文件为 Seek Code 在此项目中工作时提供指导。
 
@@ -688,7 +700,7 @@ npm run build       # 编译
 
 ### 优先级
 
-如果 `SEEK.md` 和 `CLAUDE.md` 同时存在，`SEEK.md` 优先。
+如果 `SEEKCODE.md` 和 `CLAUDE.md` 同时存在，`SEEKCODE.md` 优先。
 
 ---
 
@@ -705,11 +717,15 @@ npm run build       # 编译
 | 变量 | 描述 | 默认值 |
 |---|---|---|
 | DEEPSEEK_API_KEY | DeepSeek API 密钥 | — |
-| SEEKCODE_MODEL | 模型 ID | deepseek-v4-flash |
+| SEEKCODE_MODEL | 模型 ID | deepseek-v4-pro |
 | SEEKCODE_PROVIDER | 提供商 ID | deepseek |
 | SEEKCODE_MAX_TOKENS | 每次响应最大 Token 数 | 8192 |
-| SEEKCODE_TEMPERATURE | 温度参数 | 0.2 |
+| SEEKCODE_TEMPERATURE | 温度参数 (0-2) | 0.2 |
 | SEEKCODE_BASE_URL | API 基础 URL | https://api.deepseek.com |
+| SEEKCODE_REASONING_EFFORT | R1 推理强度：`low` \| `medium` \| `high` | medium |
+| SEEKCODE_TOP_P | 核采样 (0-1) | 1 |
+| SEEKCODE_FREQUENCY_PENALTY | 重复惩罚 (-2 到 2) | 0 |
+| SEEKCODE_PRESENCE_PENALTY | 主题多样性惩罚 (-2 到 2) | 0 |
 
 ### 配置文件位置
 
@@ -722,7 +738,11 @@ npm run build       # 编译
   "maxTokens": 8192,
   "temperature": 0.2,
   "provider": "deepseek",
-  "baseURL": "https://api.deepseek.com"
+  "baseURL": "https://api.deepseek.com",
+  "reasoningEffort": "medium",
+  "topP": 1,
+  "frequencyPenalty": 0,
+  "presencePenalty": 0
 }
 ```
 

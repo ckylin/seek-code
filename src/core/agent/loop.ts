@@ -10,7 +10,7 @@ import { ContextManager } from '../context/manager.js';
 import { loadProjectGuide } from '../context/project-guide.js';
 import { getToolDefinitions } from '../tools/registry.js';
 import { executeTool, resetYesAll } from '../tools/executor.js';
-import { printToolCall, printToolResult } from '../../utils/display.js';
+import { printToolCall, printToolResult, printAssistantHeader, printThinkingCollapsed } from '../../utils/display.js';
 import { MarkdownRenderer } from '../../utils/markdown.js';
 import { isReasonerModel, CHAT_CONTEXT_BUDGET } from '../../config.js';
 
@@ -114,9 +114,15 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<void> {
   const context = options.context ?? new ContextManager(CHAT_CONTEXT_BUDGET);
   const toolDefs = getToolDefinitions();
 
-  const guide = await loadProjectGuide(cwd);
+  const guide = options.systemPromptOverride ? null : await loadProjectGuide(cwd);
   const lang = detectSystemLanguage();
-  const systemPrompt = guide ? buildSystemPrompt(guide, lang) : buildSystemPrompt(null, lang);
+
+  // When a skill provides a system prompt override, use it instead of the
+  // default coding-assistant identity. This lets skills define completely
+  // different roles (e.g. "You are a BaZi fortune-telling master").
+  const systemPrompt = options.systemPromptOverride
+    ? options.systemPromptOverride
+    : (guide ? buildSystemPrompt(guide, lang) : buildSystemPrompt(null, lang));
 
   const isReasoner = isReasonerModel(model);
 
@@ -147,6 +153,7 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<void> {
     const toolCallAccumulator = new Map<number, { id: string; name: string; arguments: string }>();
     let finishReason: string | null = null;
     let outputTokens = 0;
+    let thinkingStartTime: number | null = null;
 
     // Animated spinner: "⠋ Thinking… (3s · ↑ 42 tokens · iter 2/30)"
     const startTime = Date.now();
@@ -197,39 +204,73 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<void> {
 
     const md = new MarkdownRenderer();
 
-    for await (const chunk of stream) {
-      if (signal?.aborted) break;
+    // Start spinner immediately so user sees instant feedback while waiting
+    // for the first streaming chunk (important for reasoner models which may
+    // take 30-60 seconds to emit their first reasoning delta).
+    showThinking();
 
-      if (chunk.type === 'text_delta') {
-        hideThinking();
-        assistantText += chunk.text;
-        outputTokens += Math.ceil(chunk.text.length / 4);
-        onText?.(chunk.text);
-        const formatted = md.feed(chunk.text);
-        if (formatted) process.stdout.write(formatted);
-      } else if (chunk.type === 'reasoning_delta') {
-        reasoningText += chunk.text;
-        outputTokens += Math.ceil(chunk.text.length / 4);
-        showThinking();
-      } else if (chunk.type === 'tool_call_delta') {
-        const existing = toolCallAccumulator.get(chunk.index) ?? { id: '', name: '', arguments: '' };
-        if (chunk.id) existing.id = chunk.id;
-        if (chunk.name) existing.name = chunk.name;
-        existing.arguments += chunk.arguments_delta;
-        toolCallAccumulator.set(chunk.index, existing);
-      } else if (chunk.type === 'finish') {
-        hideThinking();
-        finishReason = chunk.finish_reason;
+    try {
+      for await (const chunk of stream) {
+        if (signal?.aborted) break;
+
+        if (chunk.type === 'text_delta') {
+          hideThinking();
+          if (!assistantText) {
+            // Print assistant header before first text chunk
+            printAssistantHeader();
+          }
+          assistantText += chunk.text;
+          outputTokens += Math.ceil(chunk.text.length / 4);
+          onText?.(chunk.text);
+          const formatted = md.feed(chunk.text);
+          if (formatted) process.stdout.write(formatted);
+        } else if (chunk.type === 'reasoning_delta') {
+          if (thinkingStartTime === null) thinkingStartTime = Date.now();
+          reasoningText += chunk.text;
+          outputTokens += Math.ceil(chunk.text.length / 4);
+          showThinking();
+        } else if (chunk.type === 'tool_call_delta') {
+          const existing = toolCallAccumulator.get(chunk.index) ?? { id: '', name: '', arguments: '' };
+          if (chunk.id) existing.id = chunk.id;
+          if (chunk.name) existing.name = chunk.name;
+          existing.arguments += chunk.arguments_delta;
+          toolCallAccumulator.set(chunk.index, existing);
+        } else if (chunk.type === 'finish') {
+          hideThinking();
+          finishReason = chunk.finish_reason;
+        }
       }
-    }
 
-    if (signal?.aborted) break;
+      if (signal?.aborted) break;
+    } finally {
+      // Always stop the spinner, even on abort/error.
+      // Without this, the ora timer keeps writing to stdout and corrupts
+      // subsequent terminal output (e.g. the next readMultilineInput panel).
+      hideThinking();
+    }
 
     // Flush any remaining markdown buffer
     const flushOut = md.flush();
     if (flushOut) process.stdout.write(flushOut);
 
-    if (finishReason === 'stop' || toolCallAccumulator.size === 0) {
+    // Show collapsed reasoning block after stream completes
+    if (reasoningText && thinkingStartTime !== null) {
+      const elapsed = Date.now() - thinkingStartTime;
+      printThinkingCollapsed(reasoningText, elapsed);
+    }
+
+    // Warn if response was truncated due to token limit (especially common with
+    // reasoner models whose chain-of-thought consumes most of maxTokens budget).
+    if (finishReason === 'length') {
+      process.stdout.write('\n');
+      if (lang === 'zh') {
+        process.stdout.write(chalk.yellow('⚠ 响应被截断（已达 token 上限）。请用 /config maxtokens <数值> 调高上限后重试（建议 32768 或更高）。\n'));
+      } else {
+        process.stdout.write(chalk.yellow('⚠ Response truncated (token limit reached). Increase with /config maxtokens <value> (try 32768 or higher).\n'));
+      }
+    }
+
+    if (finishReason === 'stop' || (finishReason === 'length' && toolCallAccumulator.size === 0)) {
       if (assistantText) {
         context.push({
           role: 'assistant',

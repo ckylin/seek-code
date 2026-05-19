@@ -116,6 +116,9 @@ export interface AgentRunOptions {
   config: SeekCodeConfig;
   provider: LLMProvider;
   context?: import('./core/context/manager.js').ContextManager;
+  /** When provided, replaces the default coding-assistant system prompt.
+   *  Used by skills to define a completely different role/identity. */
+  systemPromptOverride?: string;
   onText?: (text: string) => void;
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: ToolResult) => void;

@@ -219,27 +219,29 @@ export async function confirmEdit(filePath: string, newContent: string): Promise
   const hunks = computeDiff(oldLines, newLines);
   const { added, removed } = countChanges(hunks);
 
-  const cols = process.stdout.columns || 80;
-  const divider = chalk.gray('─'.repeat(cols));
+  const cols = Math.min(process.stdout.columns || 80, 80);
   const isNew = !exists;
-  const label = isNew ? chalk.green('  ⊕ ') : chalk.yellow('  ⎿  ');
+  const fileLabel = (isNew ? chalk.green('⊕ ') : chalk.yellow('✎ ')) + chalk.bold(relPath(absPath));
   const stats = added > 0 || removed > 0
-    ? chalk.gray(' (') + chalk.green(`+${added}`) + chalk.gray(' ') + chalk.red(`-${removed}`) + chalk.gray(')')
+    ? '  ' + chalk.green(`+${added}`) + ' ' + chalk.red(`-${removed}`)
     : '';
+  const headerText = fileLabel + stats;
+  // Strip ANSI for length calculation
+  const headerPlain = (isNew ? '⊕ ' : '✎ ') + relPath(absPath) + (added > 0 || removed > 0 ? `  +${added} -${removed}` : '');
+  const topFill = Math.max(0, cols - 2 - headerPlain.length - 2);
+  const topBorder = chalk.gray('╭─ ') + headerText + chalk.gray(' ' + '─'.repeat(topFill) + '╮');
 
-  process.stdout.write('\n');
-  process.stdout.write(label + chalk.bold(relPath(absPath)) + stats + '\n');
+  process.stdout.write('\n' + topBorder + '\n');
 
-  // Terminal inline diff
   if (hunks.length === 0 && !isNew) {
-    process.stdout.write(chalk.gray('  (no changes)\n'));
+    process.stdout.write(chalk.gray('│  (no changes)') + '\n');
   } else {
-    process.stdout.write(divider + '\n');
     for (const line of renderDiff(hunks, oldLines.length, newLines.length)) {
-      process.stdout.write(line + '\n');
+      process.stdout.write(chalk.gray('│') + line + '\n');
     }
-    process.stdout.write(divider + '\n');
   }
+
+  process.stdout.write(chalk.gray('╰' + '─'.repeat(cols - 2) + '╯') + '\n');
 
   return promptConfirm();
 }

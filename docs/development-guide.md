@@ -91,6 +91,8 @@ seekcode/
 │   │   ├── input.ts          # Multiline input, tab completion, list selector
 │   │   ├── commands.ts       # Slash commands (/help, /model, /init, etc.)
 │   │   ├── setup.ts          # First-run setup wizard
+│   │   ├── skills.ts         # Skill loading and management
+│   │   ├── update.ts         # Version check and upgrade
 │   │   ├── banner.ts         # ASCII art banner
 │   │   └── at-resolver.ts    # @file/@url reference expansion
 │   ├── core/
@@ -107,7 +109,7 @@ seekcode/
 │   │   │   └── search_files.ts
 │   │   └── context/
 │   │       ├── manager.ts    # Context window management (token budget, trimming)
-│   │       └── project-guide.ts  # Load SEEK.md / CLAUDE.md project guides
+│   │       └── project-guide.ts  # Load SEEKCODE.md / CLAUDE.md project guides
 │   ├── providers/
 │   │   └── deepseek/
 │   │       ├── provider.ts   # DeepSeek LLM provider implementation
@@ -115,6 +117,8 @@ seekcode/
 │   ├── utils/
 │   │   ├── display.ts        # Terminal output formatting
 │   │   ├── confirm.ts        # Diff preview and user confirmation
+│   │   ├── billing.ts        # Balance/usage querying and cost display
+│   │   ├── markdown.ts       # Streaming Markdown-to-terminal renderer
 │   │   └── interrupt.ts      # SIGINT handling
 │   ├── config.ts             # Configuration loading (env vars, config file)
 │   └── types.ts              # Shared TypeScript types and interfaces
@@ -128,6 +132,7 @@ seekcode/
 ├── package.json
 ├── tsconfig.json
 ├── vitest.config.ts
+├── SEEKCODE.md               # Project guide for Seek Code
 ├── CLAUDE.md                 # Project guide for AI coding assistants
 └── README.md
 ```
@@ -257,7 +262,7 @@ console.log('[Debug] Tool params:', params);
 
 The agent loop (`src/core/agent/loop.ts`) is the core of Seek Code. When debugging the agent loop, focus on these key areas:
 
-1. **System prompt construction**: Verify the system prompt correctly includes project guide (SEEK.md/CLAUDE.md) content
+1. **System prompt construction**: Verify the system prompt correctly includes project guide (SEEKCODE.md/CLAUDE.md) content
 2. **Message history**: Print the current message list in `ContextManager` to confirm context trimming works correctly
 3. **Tool call parsing**: Check that tool_call parameters from the LLM are parsed correctly
 4. **Streaming output**: Confirm that stream chunks (text_delta, reasoning_delta, tool_call_delta) are handled correctly
@@ -452,14 +457,14 @@ The six built-in tools:
 
 | Tool | Description |
 |---|---|
-| `read_file` | Read file contents (truncated at 8000 chars) |
+| `read_file` | Read file contents (truncated at 30,000 chars) |
 | `write_file` | Write content to a file (creates directories) |
 | `edit_file` | Replace exact string in a file (string-match editing) |
 | `execute_shell` | Run shell commands with timeout |
 | `list_directory` | List directory tree with configurable depth |
 | `search_files` | Search for text patterns in files |
 
-**Safety**: Before destructive operations (`write_file`, `edit_file`), the executor shows a diff preview and asks for user confirmation.
+**Safety**: Before destructive operations (`write_file`, `edit_file`, `execute_shell`), the executor shows a diff preview and asks for user confirmation.
 
 ### Context Management (`src/core/context/manager.ts`)
 
@@ -467,7 +472,7 @@ The `ContextManager` maintains the conversation history:
 
 - **Token estimation**: Uses a simple 4:1 character-to-token ratio.
 - **Trimming**: When the estimated token count exceeds the budget, oldest non-system messages are removed.
-- **Budget**: Defaults to `maxTokens * 7` (approximately 7 rounds of conversation at full output length).
+- **Budget**: Defaults to 90,000 tokens for chat models (128K context minus output room); 100,000 for reasoner models (1M context window).
 
 ### Provider System
 
@@ -638,13 +643,19 @@ Seek Code provides a set of slash commands available in the interactive REPL. Th
 
 | Command | Description |
 |---|---|
-| `/help` | Show available commands |
-| `/model <name>` | Switch the active LLM model |
-| `/provider <id>` | Switch the active LLM provider |
-| `/init` | Re-run the setup wizard to configure API key |
+| `/help` | Show available commands and current configuration |
+| `/model <name>` | Switch the active LLM model (interactive if no name) |
+| `/init` | Analyze the codebase and generate a SEEKCODE.md project guide |
 | `/clear` | Clear the conversation history |
-| `/exit` or `/quit` | Exit the REPL |
+| `/compact` | Summarize and compress conversation history to save tokens |
+| `/review` | Review session changes for logic issues |
 | `/cost` | Show token usage and estimated cost for the session |
+| `/balance` | Show account balance and usage (today / this month) |
+| `/config` | Show or change configuration settings |
+| `/reasoning` / `/effort` | Set reasoning effort for R1 models (low/medium/high) |
+| `/token` | Update your DeepSeek API key |
+| `/skills` | List and manage skills (create, list) |
+| `/exit` | Exit the REPL |
 
 ---
 
@@ -693,8 +704,9 @@ When Seek Code is started for the first time without a configured API key, it ru
 
 1. **Detects missing configuration** — checks if `DEEPSEEK_API_KEY` is set or `~/.seekcode/config.json` exists
 2. **Prompts for API key** — asks the user to enter their DeepSeek API key
-3. **Saves configuration** — writes the key to `~/.seekcode/config.json`
-4. **Verifies the key** — makes a test API call to confirm the key works
+3. **Model selection** — lets user choose from available DeepSeek models
+4. **Saves configuration** — writes to `~/.seekcode/config.json`
+5. **Verifies the key** — makes a test API call to confirm the key works
 
 ### Skipping the Wizard
 
@@ -709,18 +721,18 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 
 ## Project Guide System
 
-Seek Code automatically loads project-level guidance from `SEEK.md` or `CLAUDE.md` files in the project root, implemented in `src/core/context/project-guide.ts`.
+Seek Code automatically loads project-level guidance from `SEEKCODE.md` or `CLAUDE.md` files in the project root, implemented in `src/core/context/project-guide.ts`.
 
 ### How It Works
 
-1. On startup, Seek Code looks for `SEEK.md` or `CLAUDE.md` in the current working directory
-2. If found, the file content is appended to the system prompt
+1. On startup, Seek Code looks for `SEEKCODE.md` or `CLAUDE.md` in the current working directory
+2. If found, the file content is prepended to the system prompt
 3. This allows each project to define custom instructions for the AI assistant
 
-### Example `SEEK.md`
+### Example `SEEKCODE.md`
 
 ```markdown
-# SEEK.md
+# SEEKCODE.md
 
 This file provides guidance to Seek Code when working with this project.
 
@@ -737,7 +749,7 @@ npm run build       # compile
 
 ### Priority
 
-If both `SEEK.md` and `CLAUDE.md` exist, `SEEK.md` takes precedence.
+If both `SEEKCODE.md` and `CLAUDE.md` exist, `SEEKCODE.md` takes precedence.
 
 ---
 
@@ -754,11 +766,15 @@ If both `SEEK.md` and `CLAUDE.md` exist, `SEEK.md` takes precedence.
 | Variable | Description | Default |
 |---|---|---|
 | `DEEPSEEK_API_KEY` | DeepSeek API key | — |
-| `SEEKCODE_MODEL` | Model ID | `deepseek-v4-flash` |
+| `SEEKCODE_MODEL` | Model ID | `deepseek-v4-pro` |
 | `SEEKCODE_PROVIDER` | Provider ID | `deepseek` |
 | `SEEKCODE_MAX_TOKENS` | Max tokens per response | `8192` |
-| `SEEKCODE_TEMPERATURE` | Temperature | `0.2` |
+| `SEEKCODE_TEMPERATURE` | Temperature (0-2) | `0.2` |
 | `SEEKCODE_BASE_URL` | API base URL | `https://api.deepseek.com` |
+| `SEEKCODE_REASONING_EFFORT` | R1 reasoning effort: `low` \| `medium` \| `high` | `medium` |
+| `SEEKCODE_TOP_P` | Nucleus sampling (0-1) | `1` |
+| `SEEKCODE_FREQUENCY_PENALTY` | Repetition penalty (-2 to 2) | `0` |
+| `SEEKCODE_PRESENCE_PENALTY` | Topic diversity penalty (-2 to 2) | `0` |
 
 ### Config File Location
 
@@ -771,7 +787,11 @@ If both `SEEK.md` and `CLAUDE.md` exist, `SEEK.md` takes precedence.
   "maxTokens": 8192,
   "temperature": 0.2,
   "provider": "deepseek",
-  "baseURL": "https://api.deepseek.com"
+  "baseURL": "https://api.deepseek.com",
+  "reasoningEffort": "medium",
+  "topP": 1,
+  "frequencyPenalty": 0,
+  "presencePenalty": 0
 }
 ```
 
@@ -794,6 +814,18 @@ export async function loadConfig(): Promise<SeekCodeConfig> {
       : (fileConfig.temperature ?? DEFAULTS.temperature),
     apiKey: process.env.DEEPSEEK_API_KEY ?? fileConfig.apiKey ?? '',
     baseURL: process.env.SEEKCODE_BASE_URL ?? fileConfig.baseURL ?? DEFAULTS.baseURL,
+    reasoningEffort: (process.env.SEEKCODE_REASONING_EFFORT as 'low' | 'medium' | 'high')
+      ?? fileConfig.reasoningEffort
+      ?? DEFAULTS.reasoningEffort,
+    topP: process.env.SEEKCODE_TOP_P
+      ? parseFloat(process.env.SEEKCODE_TOP_P)
+      : (fileConfig.topP ?? DEFAULTS.topP),
+    frequencyPenalty: process.env.SEEKCODE_FREQUENCY_PENALTY
+      ? parseFloat(process.env.SEEKCODE_FREQUENCY_PENALTY)
+      : (fileConfig.frequencyPenalty ?? DEFAULTS.frequencyPenalty),
+    presencePenalty: process.env.SEEKCODE_PRESENCE_PENALTY
+      ? parseFloat(process.env.SEEKCODE_PRESENCE_PENALTY)
+      : (fileConfig.presencePenalty ?? DEFAULTS.presencePenalty),
   };
 }
 ```

@@ -1,26 +1,28 @@
 import chalk from 'chalk';
 
+// ── SEEK CODE wordmark — refined pixel art ──────────────────────────────────
+
 const GLYPHS: Record<string, string[]> = {
   S: [
-    '▄███▄',
-    '██   ',
-    '▀███▄',
-    '   ██',
-    '▀███▀',
+    ' ▄███▄ ',
+    ' ██    ',
+    ' ▀███▄ ',
+    '    ██ ',
+    ' ▀███▀ ',
   ],
   E: [
-    '█████',
-    '██   ',
-    '████ ',
-    '██   ',
-    '█████',
+    ' █████ ',
+    ' ██    ',
+    ' ████  ',
+    ' ██    ',
+    ' █████ ',
   ],
   K: [
-    '██  █',
-    '██▄█ ',
-    '███  ',
-    '██▀█ ',
-    '██  █',
+    ' ██  █ ',
+    ' ██▄▀  ',
+    ' ███   ',
+    ' ██▀▄  ',
+    ' ██  █ ',
   ],
   ' ': [
     '   ',
@@ -30,25 +32,25 @@ const GLYPHS: Record<string, string[]> = {
     '   ',
   ],
   C: [
-    '▄███▄',
-    '██   ',
-    '██   ',
-    '██   ',
-    '▀███▀',
+    ' ▄███▄ ',
+    ' ██    ',
+    ' ██    ',
+    ' ██    ',
+    ' ▀███▀ ',
   ],
   O: [
-    '▄███▄',
-    '██  █',
-    '██  █',
-    '██  █',
-    '▀███▀',
+    ' ▄███▄ ',
+    ' ██  █ ',
+    ' ██  █ ',
+    ' ██  █ ',
+    ' ▀███▀ ',
   ],
   D: [
-    '████▄',
-    '██  █',
-    '██  █',
-    '██  █',
-    '████▀',
+    ' ████▄ ',
+    ' ██  █ ',
+    ' ██  █ ',
+    ' ██  █ ',
+    ' ████▀ ',
   ],
 };
 
@@ -56,13 +58,18 @@ const WORD = 'SEEK CODE';
 
 export function printBanner(model: string): void {
   const cols = process.stdout.columns || 80;
-  const b = chalk.blue;
-  const g = chalk.gray;
-
   const termH = process.stdout.rows || 24;
-  const skipGlyphs = termH < 14; // skip 5-row art when terminal is too short
+
+  // Blue accent — matches the Seek Code logo
+  const blue = (s: string) => chalk.hex('#4A90D9')(s);
+  const dim = chalk.gray;
+  const bold = chalk.bold;
+
+  // Skip glyphs when terminal is too short
+  const skipGlyphs = termH < 14;
 
   if (!skipGlyphs) {
+    // Build the wordmark row by row
     const rows = Array.from({ length: 5 }, () => '');
     for (let i = 0; i < WORD.length; i++) {
       const ch = WORD[i];
@@ -72,21 +79,22 @@ export function printBanner(model: string): void {
       }
     }
 
+    // Centre the wordmark
     process.stdout.write('\n');
     for (const row of rows) {
       const pad = Math.max(0, Math.floor((cols - row.length) / 2));
-      process.stdout.write(' '.repeat(pad) + chalk.cyan.bold(row) + '\n');
+      process.stdout.write(' '.repeat(pad) + blue(row) + '\n');
     }
     process.stdout.write('\n');
   }
 
-  process.stdout.write(b('─'.repeat(cols)) + '\n');
+  // ── Version/model info line ────────────────────────────────────────────
   process.stdout.write(
-    '  ' + chalk.bold.white('Seek Code') +
-    g('  v0.1.0  ·  model: ') +
-    chalk.cyan(model) +
-    g('  ·  /help for commands') + '\n',
+    '  ' +
+    bold.white('Seek Code') +
+    dim('  v0.1.0  ·  model: ') +
+    blue(model) +
+    dim('  ·  /help for commands') +
+    '\n\n',
   );
-  process.stdout.write(b('─'.repeat(cols)) + '\n');
-  process.stdout.write('\n');
 }

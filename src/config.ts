@@ -77,11 +77,25 @@ export async function saveConfig(config: SeekCodeConfig): Promise<void> {
 }
 
 /**
- * Detect whether the current model is a DeepSeek reasoner (R1) model.
- * R1 models do NOT support `temperature` and have different system-prompt semantics.
+ * Detect whether the current model is a DeepSeek "pure" reasoner (R1) model.
+ * R1 models do NOT support `temperature`, reject the `system` role, and
+ * require the system prompt to be embedded in the first user message.
  */
 export function isReasonerModel(model: string): boolean {
-  return model.includes('reasoner') || model.toLowerCase().includes('r1');
+  const lower = model.toLowerCase();
+  return lower.includes('reasoner') || lower.includes('r1');
+}
+
+/**
+ * Detect whether the model supports reasoning/thinking capabilities
+ * (emits reasoning_content, supports reasoning_effort parameter).
+ * This includes R1 reasoner models AND V4 Pro models.
+ */
+export function supportsReasoning(model: string): boolean {
+  const lower = model.toLowerCase();
+  return isReasonerModel(model)
+    || lower.includes('v4')
+    || lower.includes('pro');
 }
 
 /** Reasoner models have a huge context (1M tokens) — give them more room */
