@@ -8,7 +8,7 @@ describe('read_file', () => {
   let dir: string;
 
   beforeEach(async () => {
-    dir = join(tmpdir(), `seekcode-test-${Date.now()}`);
+    dir = join(tmpdir(), `codegrunt-test-${Date.now()}`);
     await mkdir(dir, { recursive: true });
   });
 

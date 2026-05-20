@@ -145,17 +145,17 @@ async function loadSkillsFromDir(dir: string, source: 'project' | 'global'): Pro
   return skills;
 }
 
-/** Global skills directory: ~/.seekcode/skills/ */
+/** Global skills directory: ~/.codegrunt/skills/ */
 export function getGlobalSkillsDir(): string {
-  return join(homedir(), '.seekcode', 'skills');
+  return join(homedir(), '.codegrunt', 'skills');
 }
 
-/** Project skills directory: .seekcode/skills/ */
+/** Project skills directory: .codegrunt/skills/ */
 export function getProjectSkillsDir(cwd: string): string {
-  return resolve(cwd, '.seekcode', 'skills');
+  return resolve(cwd, '.codegrunt', 'skills');
 }
 
-/** Load skills from project (.seekcode/skills/) and global (~/.seek/skills/) directories */
+/** Load skills from project (.codegrunt/skills/) and global (~/.codegrunt/skills/) directories */
 export async function loadSkills(cwd: string): Promise<Skill[]> {
   const projectDir = getProjectSkillsDir(cwd);
   const globalDir = getGlobalSkillsDir();
@@ -257,7 +257,7 @@ export async function installSkillFromZip(zipPath: string): Promise<{ name: stri
     skillName = basename(zipPath).replace(/\.zip$/i, '');
   }
 
-  // Extract all files into ~/.seekcode/skills/<skillName>/
+  // Extract all files into ~/.codegrunt/skills/<skillName>/
   const skillDir = join(dir, skillName);
   await mkdir(skillDir, { recursive: true });
 

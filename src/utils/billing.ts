@@ -3,7 +3,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import chalk from 'chalk';
 
-const CONFIG_DIR = join(homedir(), '.seekcode');
+const CONFIG_DIR = join(homedir(), '.codegrunt');
 const USAGE_PATH = join(CONFIG_DIR, 'usage.json');
 
 // ── DeepSeek balance API response ─────────────────────────────────────────

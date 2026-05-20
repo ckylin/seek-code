@@ -1,36 +1,8 @@
 import chalk from 'chalk';
 
-// ── SEEK CODE wordmark — refined pixel art ──────────────────────────────────
+// ── CODEGRUNT wordmark — pixel art ──────────────────────────────────────────
 
 const GLYPHS: Record<string, string[]> = {
-  S: [
-    ' ▄███▄ ',
-    ' ██    ',
-    ' ▀███▄ ',
-    '    ██ ',
-    ' ▀███▀ ',
-  ],
-  E: [
-    ' █████ ',
-    ' ██    ',
-    ' ████  ',
-    ' ██    ',
-    ' █████ ',
-  ],
-  K: [
-    ' ██  █ ',
-    ' ██▄▀  ',
-    ' ███   ',
-    ' ██▀▄  ',
-    ' ██  █ ',
-  ],
-  ' ': [
-    '   ',
-    '   ',
-    '   ',
-    '   ',
-    '   ',
-  ],
   C: [
     ' ▄███▄ ',
     ' ██    ',
@@ -52,15 +24,64 @@ const GLYPHS: Record<string, string[]> = {
     ' ██  █ ',
     ' ████▀ ',
   ],
+  E: [
+    ' █████ ',
+    ' ██    ',
+    ' ████  ',
+    ' ██    ',
+    ' █████ ',
+  ],
+  G: [
+    ' ▄███▄ ',
+    ' ██    ',
+    ' ██ ██ ',
+    ' ██  █ ',
+    ' ▀███▀ ',
+  ],
+  R: [
+    ' ████▄ ',
+    ' ██  █ ',
+    ' ████▀ ',
+    ' ██▄   ',
+    ' ██  █ ',
+  ],
+  U: [
+    ' █   █ ',
+    ' █   █ ',
+    ' █   █ ',
+    ' █   █ ',
+    ' ▀███▀ ',
+  ],
+  N: [
+    ' █   █ ',
+    ' ██  █ ',
+    ' █ █ █ ',
+    ' █  ██ ',
+    ' █   █ ',
+  ],
+  T: [
+    ' █████ ',
+    '   █   ',
+    '   █   ',
+    '   █   ',
+    '   █   ',
+  ],
+  ' ': [
+    '   ',
+    '   ',
+    '   ',
+    '   ',
+    '   ',
+  ],
 };
 
-const WORD = 'SEEK CODE';
+const WORD = 'CODEGRUNT';
 
 export function printBanner(model: string): void {
   const cols = process.stdout.columns || 80;
   const termH = process.stdout.rows || 24;
 
-  // Blue accent — matches the Seek Code logo
+  // Blue accent
   const blue = (s: string) => chalk.hex('#4A90D9')(s);
   const dim = chalk.gray;
   const bold = chalk.bold;
@@ -91,7 +112,7 @@ export function printBanner(model: string): void {
   // ── Version/model info line ────────────────────────────────────────────
   process.stdout.write(
     '  ' +
-    bold.white('Seek Code') +
+    bold.white('CodeGrunt') +
     dim('  v0.1.0  ·  model: ') +
     blue(model) +
     dim('  ·  /help for commands') +

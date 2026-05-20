@@ -3,11 +3,11 @@ import { writeFile, mkdir } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 import chalk from 'chalk';
-import type { SeekCodeConfig } from '../types.js';
+import type { CodeGruntConfig } from '../types.js';
 import { selectFromList } from './input.js';
 import { validateApiKey } from '../providers/deepseek/client.js';
 
-const CONFIG_DIR = join(homedir(), '.seekcode');
+const CONFIG_DIR = join(homedir(), '.codegrunt');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 
 export const DEEPSEEK_MODELS: Array<{ id: string; label: string; description: string }> = [
@@ -28,12 +28,12 @@ export const DEEPSEEK_MODELS: Array<{ id: string; label: string; description: st
   },
 ];
 
-export async function runSetup(existingConfig: SeekCodeConfig): Promise<SeekCodeConfig> {
+export async function runSetup(existingConfig: CodeGruntConfig): Promise<CodeGruntConfig> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const ask = (prompt: string): Promise<string> =>
     new Promise((resolve) => rl.question(prompt, resolve));
 
-  console.log(chalk.bold('\nWelcome to Seek Code!'));
+  console.log(chalk.bold('\nWelcome to CodeGrunt!'));
   console.log(chalk.gray("Let's set up your configuration.\n"));
   console.log(
     chalk.gray('Get your DeepSeek API key at: ') +
@@ -74,7 +74,7 @@ export async function runSetup(existingConfig: SeekCodeConfig): Promise<SeekCode
   );
   const model = selectedModel ?? existingConfig.model;
 
-  const config: SeekCodeConfig = { ...existingConfig, apiKey, model };
+  const config: CodeGruntConfig = { ...existingConfig, apiKey, model };
   const selected = DEEPSEEK_MODELS.find((m) => m.id === model);
 
   await mkdir(CONFIG_DIR, { recursive: true });

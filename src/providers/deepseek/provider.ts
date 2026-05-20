@@ -1,7 +1,7 @@
 import type OpenAI from 'openai';
 import type { LLMProvider, Message, RequestOptions, StreamChunk, ToolDefinition, TextMessage, ToolCallMessage } from '../../types.js';
 import { createOpenAIClient } from './client.js';
-import type { SeekCodeConfig } from '../../types.js';
+import type { CodeGruntConfig } from '../../types.js';
 import chalk from 'chalk';
 import { addUsage } from '../../core/agent/loop.js';
 import { recordUsage } from '../../utils/billing.js';
@@ -16,7 +16,7 @@ export class DeepSeekProvider implements LLMProvider {
   readonly id = 'deepseek';
   private client: OpenAI;
 
-  constructor(config: SeekCodeConfig) {
+  constructor(config: CodeGruntConfig) {
     this.client = createOpenAIClient(config);
   }
 

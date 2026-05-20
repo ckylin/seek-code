@@ -10,7 +10,7 @@ import { printBanner } from './banner.js';
 import { readMultilineInput } from './input.js';
 import { loadSkills } from './skills.js';
 import { saveConfig, supportsReasoning, CONTEXT_BUDGET, CHAT_CONTEXT_BUDGET } from '../config.js';
-import type { SeekCodeConfig, LLMProvider } from '../types.js';
+import type { CodeGruntConfig, LLMProvider } from '../types.js';
 
 /**
  * Drain any buffered stdin data. Safe to call after readMultilineInput
@@ -42,7 +42,7 @@ async function drainStdin(): Promise<void> {
   while (process.stdin.read() !== null) { /* drain */ }
 }
 
-export async function startRepl(initialConfig: SeekCodeConfig, initialProvider: LLMProvider): Promise<void> {
+export async function startRepl(initialConfig: CodeGruntConfig, initialProvider: LLMProvider): Promise<void> {
   const cwd = process.cwd();
   const budget = supportsReasoning(initialConfig.model) ? CONTEXT_BUDGET : CHAT_CONTEXT_BUDGET;
   const context = new ContextManager(budget);

@@ -27,7 +27,7 @@ const SLASH_COMMANDS = [
   { name: '/review',  desc: 'Review session changes for logic issues' },
   { name: '/clear',   desc: 'Clear conversation context' },
   { name: '/balance', desc: 'Show account balance & usage' },
-  { name: '/exit',    desc: 'Exit Seek Code (or exit current skill)' },
+  { name: '/exit',    desc: 'Exit CodeGrunt (or exit current skill)' },
   { name: '/help',    desc: 'Show help' },
 ];
 
@@ -53,9 +53,9 @@ async function getFileCompletions(partial: string, cwd: string): Promise<string[
   }
 }
 
-/** Detect which context file is active (SEEKCODE.md > CLAUDE.md > none) */
+/** Detect which context file is active (CODEGRUNT.md > CLAUDE.md > none) */
 async function detectContextFile(cwd: string): Promise<string | null> {
-  for (const name of ['SEEKCODE.md', 'CLAUDE.md']) {
+  for (const name of ['CODEGRUNT.md', 'CLAUDE.md']) {
     try {
       await access(join(cwd, name));
       return name;

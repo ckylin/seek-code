@@ -61,7 +61,7 @@ function getCurrentVersion(): string {
 
 // ── Fetch latest ─────────────────────────────────────────────────────────────
 
-const NPM_REGISTRY = 'https://registry.npmjs.org/seekcode/latest';
+const NPM_REGISTRY = 'https://registry.npmjs.org/codegrunt/latest';
 
 async function fetchLatestVersion(): Promise<string | null> {
   const controller = new AbortController();
@@ -88,7 +88,7 @@ async function fetchLatestVersion(): Promise<string | null> {
 
 function runNpmInstall(version: string): Promise<boolean> {
   return new Promise((resolve_p) => {
-    const child = spawn('npm', ['install', '-g', `seekcode@${version}`], {
+    const child = spawn('npm', ['install', '-g', `codegrunt@${version}`], {
       stdio: 'inherit',
       // shell:true on Windows so .cmd wrappers work
       shell: process.platform === 'win32',
@@ -123,7 +123,7 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   // ── Already up to date ──
   if (!isNewer(latestVersion, currentVersion)) {
     console.log(
-      chalk.green('✓ seekcode is up to date') +
+      chalk.green('✓ codegrunt is up to date') +
       chalk.gray(`  (v${currentVersion})`),
     );
     return;
@@ -132,7 +132,7 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   // ── Update available ──
   console.log();
   console.log(
-    chalk.gray('  seekcode  ') +
+    chalk.gray('  codegrunt  ') +
     chalk.yellow(`v${currentVersion}`) +
     chalk.gray('  →  ') +
     chalk.green(`v${latestVersion}`),
@@ -140,7 +140,7 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   console.log();
 
   if (opts.checkOnly) {
-    console.log(chalk.gray(`  Run ${chalk.cyan('seekcode update')} to upgrade.`));
+    console.log(chalk.gray(`  Run ${chalk.cyan('codegrunt update')} to upgrade.`));
     return;
   }
 
@@ -160,18 +160,18 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
 
   // ── Install ──
   console.log(
-    chalk.gray(`\nRunning ${chalk.cyan(`npm install -g seekcode@${latestVersion}`)}...\n`),
+    chalk.gray(`\nRunning ${chalk.cyan(`npm install -g codegrunt@${latestVersion}`)}...\n`),
   );
 
   const success = await runNpmInstall(latestVersion);
 
   if (success) {
     console.log();
-    console.log(chalk.green(`✓ Upgraded to seekcode@${latestVersion}`));
+    console.log(chalk.green(`✓ Upgraded to codegrunt@${latestVersion}`));
   } else {
     console.log();
     printError(
-      `Upgrade failed. Try manually: ${chalk.cyan('npm install -g seekcode@latest')}`,
+      `Upgrade failed. Try manually: ${chalk.cyan('npm install -g codegrunt@latest')}`,
     );
     process.exit(1);
   }

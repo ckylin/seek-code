@@ -1,24 +1,24 @@
-# Seek Code
+# CodeGrunt
 
 <p align="center">
-  <img src="./assets/logo.png" alt="Seek Code Logo" width="50%" />
+  <img src="./assets/logo.png" alt="CodeGrunt Logo" width="50%" />
 </p>
 
 > An AI-powered CLI coding assistant for the terminal — built on DeepSeek.
 
-[![npm version](https://img.shields.io/npm/v/seekcode.svg)](https://www.npmjs.com/package/seekcode)
+[![npm version](https://img.shields.io/npm/v/codegrunt.svg)](https://www.npmjs.com/package/codegrunt)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
 
-Seek Code is an open-source, terminal-native AI coding assistant. It reads your codebase, understands context, and helps you write, refactor, debug, and ship code — all from the command line.
+CodeGrunt is an open-source, terminal-native AI coding assistant. It reads your codebase, understands context, and helps you write, refactor, debug, and ship code — all from the command line.
 
 ```bash
 # Interactive REPL
-seekcode
+codegrunt
 
 # One-shot task
-seekcode "refactor the auth module to use async/await"
+codegrunt "refactor the auth module to use async/await"
 ```
 
 > 🇨🇳 [中文文档](./README.md)
@@ -27,8 +27,8 @@ seekcode "refactor the auth module to use async/await"
 
 ## Features
 
-- **🤖 Agentic coding** — Seek Code can read files, edit code, run shell commands, search codebase, and iterate autonomously on multi-step tasks using a ReAct (Reasoning + Acting) loop
-- **📂 Codebase-aware** — understands your project structure, imports, and conventions via `@` file references and project guide files (`SEEKCODE.md` / `CLAUDE.md`)
+- **🤖 Agentic coding** — CodeGrunt can read files, edit code, run shell commands, search codebase, and iterate autonomously on multi-step tasks using a ReAct (Reasoning + Acting) loop
+- **📂 Codebase-aware** — understands your project structure, imports, and conventions via `@` file references and project guide files (`CODEGRUNT.md` / `CLAUDE.md`)
 - **🔌 DeepSeek powered** — ships with DeepSeek Chat, V4 Flash, V4 Pro, and R1 reasoner models
 - **🛠️ Tool use** — 6 built-in tools: file read/write/edit, shell execution, directory listing, and code search — with diff preview and user confirmation for destructive operations
 - **⚡ Streaming output** — real-time token streaming with Markdown rendering and reasoning visibility for a responsive terminal experience
@@ -44,19 +44,19 @@ seekcode "refactor the auth module to use async/await"
 
 ```bash
 # Install globally
-npm install -g seekcode
+npm install -g codegrunt
 
 # Set your API key
 export DEEPSEEK_API_KEY=your_key_here
 
 # Start an interactive session
-seekcode
+codegrunt
 
 # One-shot task
-seekcode "explain the architecture of this project"
+codegrunt "explain the architecture of this project"
 ```
 
-On first run without an API key, Seek Code will launch an interactive setup wizard to guide you through configuration.
+On first run without an API key, CodeGrunt will launch an interactive setup wizard to guide you through configuration.
 
 ---
 
@@ -67,20 +67,20 @@ On first run without an API key, Seek Code will launch an interactive setup wiza
 ### npm (recommended)
 
 ```bash
-npm install -g seekcode
+npm install -g codegrunt
 ```
 
 ### pnpm
 
 ```bash
-pnpm add -g seekcode
+pnpm add -g codegrunt
 ```
 
 ### Build from source
 
 ```bash
-git clone https://github.com/your-org/seekcode.git
-cd seekcode
+git clone https://github.com/your-org/codegrunt.git
+cd codegrunt
 npm install
 npm run build
 npm link
@@ -93,7 +93,7 @@ npm link
 ### Interactive REPL
 
 ```bash
-seekcode
+codegrunt
 ```
 
 Starts an interactive session with:
@@ -107,7 +107,7 @@ Starts an interactive session with:
 ### One-shot mode
 
 ```bash
-seekcode "your task description"
+codegrunt "your task description"
 ```
 
 Executes a single task and exits. Useful for scripting and quick queries.
@@ -119,7 +119,7 @@ Executes a single task and exits. Useful for scripting and quick queries.
 | `/help` | Show help message with all available commands |
 | `/model` | Switch model interactively (arrow-key selector) |
 | `/model <id>` | Switch to a specific model (e.g., `/model deepseek-v4-pro`) |
-| `/init` | Analyze the codebase and generate a `SEEKCODE.md` project guide |
+| `/init` | Analyze the codebase and generate a `CODEGRUNT.md` project guide |
 | `/clear` | Clear conversation context |
 | `/compact` | Summarize and compress conversation history to save tokens |
 | `/review` | Review session changes for logic issues |
@@ -129,7 +129,7 @@ Executes a single task and exits. Useful for scripting and quick queries.
 | `/reasoning` / `/effort` | Set reasoning effort for R1 models (low/medium/high) |
 | `/token` | Update your DeepSeek API key |
 | `/skills` | List and manage skills (create, list) |
-| `/exit` | Exit Seek Code |
+| `/exit` | Exit CodeGrunt |
 
 ### @-References
 
@@ -147,24 +147,24 @@ Tab completion is supported for file and directory paths.
 
 ## Configuration
 
-Seek Code is configured via environment variables or a `~/.seekcode/config.json` file.
+CodeGrunt is configured via environment variables or a `~/.codegrunt/config.json` file.
 
 ### Environment variables
 
 | Variable | Description | Default |
 |---|---|---|
 | `DEEPSEEK_API_KEY` | DeepSeek API key | — |
-| `SEEKCODE_MODEL` | Model ID to use | `deepseek-v4-pro` |
-| `SEEKCODE_PROVIDER` | LLM provider | `deepseek` |
-| `SEEKCODE_MAX_TOKENS` | Max tokens per response | `8192` |
-| `SEEKCODE_TEMPERATURE` | Response temperature (0-2) | `0.2` |
-| `SEEKCODE_BASE_URL` | Custom API base URL | `https://api.deepseek.com` |
-| `SEEKCODE_REASONING_EFFORT` | R1 reasoning effort: `low` \| `medium` \| `high` | `medium` |
-| `SEEKCODE_TOP_P` | Nucleus sampling (0-1) | `1` |
-| `SEEKCODE_FREQUENCY_PENALTY` | Repetition penalty (-2 to 2) | `0` |
-| `SEEKCODE_PRESENCE_PENALTY` | Topic diversity penalty (-2 to 2) | `0` |
+| `CODEGRUNT_MODEL` | Model ID to use | `deepseek-v4-pro` |
+| `CODEGRUNT_PROVIDER` | LLM provider | `deepseek` |
+| `CODEGRUNT_MAX_TOKENS` | Max tokens per response | `8192` |
+| `CODEGRUNT_TEMPERATURE` | Response temperature (0-2) | `0.2` |
+| `CODEGRUNT_BASE_URL` | Custom API base URL | `https://api.deepseek.com` |
+| `CODEGRUNT_REASONING_EFFORT` | R1 reasoning effort: `low` \| `medium` \| `high` | `medium` |
+| `CODEGRUNT_TOP_P` | Nucleus sampling (0-1) | `1` |
+| `CODEGRUNT_FREQUENCY_PENALTY` | Repetition penalty (-2 to 2) | `0` |
+| `CODEGRUNT_PRESENCE_PENALTY` | Topic diversity penalty (-2 to 2) | `0` |
 
-### Config file (`~/.seekcode/config.json`)
+### Config file (`~/.codegrunt/config.json`)
 
 ```json
 {
@@ -194,7 +194,7 @@ The config file is auto-generated on first run via the setup wizard. Environment
 ## Architecture
 
 ```
-seekcode/
+codegrunt/
 ├── src/
 │   ├── cli/                      # CLI entry point, REPL, argument parsing
 │   │   ├── index.ts              # Entry point (commander-based CLI)
@@ -220,7 +220,7 @@ seekcode/
 │   │   │   └── search_files.ts   # Search text in files
 │   │   └── context/
 │   │       ├── manager.ts        # Context window management (token budget, trimming)
-│   │       └── project-guide.ts  # Load SEEKCODE.md / CLAUDE.md project guides
+│   │       └── project-guide.ts  # Load CODEGRUNT.md / CLAUDE.md project guides
 │   ├── providers/
 │   │   └── deepseek/
 │   │       ├── provider.ts       # DeepSeek LLM provider implementation
@@ -245,7 +245,7 @@ seekcode/
 ├── package.json
 ├── tsconfig.json
 ├── vitest.config.ts
-├── SEEKCODE.md                   # Project guide for Seek Code
+├── CODEGRUNT.md                   # Project guide for CodeGrunt
 ├── CLAUDE.md                     # Project guide for AI coding assistants
 └── README.md                     # This file (Chinese)
 ```
@@ -269,7 +269,7 @@ User input (CLI / REPL)
 
 ### Agent Loop (`src/core/agent/loop.ts`)
 
-The agent loop is the core of Seek Code. It follows a ReAct (Reasoning + Acting) pattern:
+The agent loop is the core of CodeGrunt. It follows a ReAct (Reasoning + Acting) pattern:
 
 1. **System prompt** is built once per session (stays stable to maximize prompt cache hits)
 2. **User message** is prefixed with `[cwd]` and `[date]` for context

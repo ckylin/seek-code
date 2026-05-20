@@ -1,4 +1,4 @@
-# SEEKCODE.md — Developer Guide
+# CODEGRUNT.md — Developer Guide
 
 ## Build & Dev Commands
 
@@ -55,11 +55,11 @@ index.ts  →  Commander.js program
 
 **`commands.ts`** — Slash command handler. Returns discriminated unions: `handled`, `clear`, `config_changed`, `model_changed`, `skill_run`, `exit`, `skills_reload`, or `not_a_command`. Commands include `/init`, `/model`, `/compact`, `/clear`, `/config`, `/cost`, `/balance`, `/token`, `/reasoning`, `/effort`, `/review`, `/skills`, `/exit`, and skill execution via `/skill-name`.
 
-**`skills.ts`** — Loads user-defined skills from `~/.seekcode/skills/` (global) and `.seekcode/skills/` (project-local). Each skill is a `.md` file or a directory with `skill.md` containing frontmatter (`name`, `description`, `system`) and a prompt template body. Supports installing skills from `.zip` files. Skills appear in tab completion and the `/help` menu.
+**`skills.ts`** — Loads user-defined skills from `~/.codegrunt/skills/` (global) and `.codegrunt/skills/` (project-local). Each skill is a `.md` file or a directory with `skill.md` containing frontmatter (`name`, `description`, `system`) and a prompt template body. Supports installing skills from `.zip` files. Skills appear in tab completion and the `/help` menu.
 
-**`setup.ts`** — Interactive first-run wizard: collects API key, model selection (lists DeepSeek models), token limit, reasoning effort. Writes to `~/.seekcode/config.json`.
+**`setup.ts`** — Interactive first-run wizard: collects API key, model selection (lists DeepSeek models), token limit, reasoning effort. Writes to `~/.codegrunt/config.json`.
 
-**`update.ts`** — Checks npm registry for new versions and upgrades the global installation via `npm install -g seekcode@latest`.
+**`update.ts`** — Checks npm registry for new versions and upgrades the global installation via `npm install -g codegrunt@latest`.
 
 ### Agent Loop (`src/core/agent/loop.ts`)
 
@@ -79,7 +79,7 @@ Manages conversation message array with a **token budget**. When the budget is e
 - `CONTEXT_BUDGET` — for reasoner models (larger)
 - `CHAT_CONTEXT_BUDGET` — for standard chat models (smaller)
 
-**`project-guide.ts`** — Scans for `SEEKCODE.md` or `CLAUDE.md` in the working directory and injects it into the system prompt as codebase-level context.
+**`project-guide.ts`** — Scans for `CODEGRUNT.md` or `CLAUDE.md` in the working directory and injects it into the system prompt as codebase-level context.
 
 ### Tool System (`src/core/tools/`)
 
@@ -132,8 +132,8 @@ Several modules (commands, input, tool executor) return tagged unions rather tha
 type SlashCommandResult =
   | { type: 'handled' }
   | { type: 'clear' }
-  | { type: 'config_changed'; config: SeekCodeConfig }
-  | { type: 'model_changed'; config: SeekCodeConfig }
+  | { type: 'config_changed'; config: CodeGruntConfig }
+  | { type: 'model_changed'; config: CodeGruntConfig }
   | { type: 'exit' }
   | { type: 'skill_run'; prompt: string; system?: string }
   | { type: 'skills_reload' }
@@ -143,7 +143,7 @@ This keeps control flow at the call site explicit.
 
 ### Config is Passed, Not Global
 
-`SeekCodeConfig` is loaded once in `index.ts` and threaded through function arguments. Nothing imports config globally. The exception is `config.ts` which exports constants (`CONTEXT_BUDGET`, `CHAT_CONTEXT_BUDGET`) and predicate functions (`isReasonerModel`).
+`CodeGruntConfig` is loaded once in `index.ts` and threaded through function arguments. Nothing imports config globally. The exception is `config.ts` which exports constants (`CONTEXT_BUDGET`, `CHAT_CONTEXT_BUDGET`) and predicate functions (`isReasonerModel`).
 
 ### Provider-Agnostic Agent Loop
 
@@ -170,19 +170,19 @@ Write/edit/shell tools compute a diff or display the command, call `confirm()`, 
 | Variable | Effect | Required |
 |---|---|---|
 | `DEEPSEEK_API_KEY` | API key for DeepSeek provider | Yes |
-| `SEEKCODE_MODEL` | Override default model ID | No |
-| `SEEKCODE_PROVIDER` | Override provider ID | No |
-| `SEEKCODE_MAX_TOKENS` | Max tokens per response | No |
-| `SEEKCODE_TEMPERATURE` | Response temperature (0-2) | No |
-| `SEEKCODE_BASE_URL` | Custom API base URL | No |
-| `SEEKCODE_REASONING_EFFORT` | R1 reasoning effort: `low` \| `medium` \| `high` | No |
-| `SEEKCODE_TOP_P` | Nucleus sampling (0-1) | No |
-| `SEEKCODE_FREQUENCY_PENALTY` | Repetition penalty (-2 to 2) | No |
-| `SEEKCODE_PRESENCE_PENALTY` | Topic diversity penalty (-2 to 2) | No |
+| `CODEGRUNT_MODEL` | Override default model ID | No |
+| `CODEGRUNT_PROVIDER` | Override provider ID | No |
+| `CODEGRUNT_MAX_TOKENS` | Max tokens per response | No |
+| `CODEGRUNT_TEMPERATURE` | Response temperature (0-2) | No |
+| `CODEGRUNT_BASE_URL` | Custom API base URL | No |
+| `CODEGRUNT_REASONING_EFFORT` | R1 reasoning effort: `low` \| `medium` \| `high` | No |
+| `CODEGRUNT_TOP_P` | Nucleus sampling (0-1) | No |
+| `CODEGRUNT_FREQUENCY_PENALTY` | Repetition penalty (-2 to 2) | No |
+| `CODEGRUNT_PRESENCE_PENALTY` | Topic diversity penalty (-2 to 2) | No |
 
 ### Config File
 
-`~/.seekcode/config.json` — created by the setup wizard on first run. Stores:
+`~/.codegrunt/config.json` — created by the setup wizard on first run. Stores:
 ```json
 {
   "apiKey": "sk-...",
@@ -199,8 +199,8 @@ Write/edit/shell tools compute a diff or display the command, call `confirm()`, 
 
 ### Project Guide Files
 
-At startup, the context manager scans the working directory for `SEEKCODE.md` (preferred) or `CLAUDE.md` (fallback). If found, the file content is prepended to the system prompt to give the LLM project-specific context.
+At startup, the context manager scans the working directory for `CODEGRUNT.md` (preferred) or `CLAUDE.md` (fallback). If found, the file content is prepended to the system prompt to give the LLM project-specific context.
 
 ### Skills Directory
 
-`~/.seekcode/skills/` (global) and `.seekcode/skills/` (project-local) — each skill is a `.md` file with YAML frontmatter (`name`, `description`, `system`) and a Markdown body, or a directory containing `skill.md`. Install new skills via `seekcode skills add -f <file.zip>`. Skills appear as slash commands in the REPL.
+`~/.codegrunt/skills/` (global) and `.codegrunt/skills/` (project-local) — each skill is a `.md` file with YAML frontmatter (`name`, `description`, `system`) and a Markdown body, or a directory containing `skill.md`. Install new skills via `codegrunt skills add -f <file.zip>`. Skills appear as slash commands in the REPL.
