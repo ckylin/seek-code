@@ -1,10 +1,10 @@
-# CodeGrunt
+# CodeGrunt <small>（代码民工）</small>
 
 <p align="center">
   <img src="./assets/logo.png" alt="CodeGrunt Logo" width="50%" />
 </p>
 
-> 终端原生的 AI 命令行编程助手 — 基于 DeepSeek 构建。
+> **代码民工** — 终端原生的 AI 命令行编程助手，基于 DeepSeek 构建。
 
 [![npm version](https://img.shields.io/npm/v/codegrunt.svg)](https://www.npmjs.com/package/codegrunt)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
