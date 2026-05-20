@@ -4,10 +4,11 @@ import chalk from 'chalk';
 import type { LLMProvider, Message, SeekCodeConfig } from '../types.js';
 import type { ContextManager } from '../core/context/manager.js';
 import { DEEPSEEK_MODELS } from './setup.js';
-import { getSessionUsage, resetSessionUsage, addUsage } from '../core/agent/loop.js';
-import { printBalanceAndUsage } from '../utils/billing.js';
+import { getSessionUsage } from '../core/agent/loop.js';
+import { printBalanceAndUsage, formatDualCurrency, PRICING } from '../utils/billing.js';
 import type { Skill } from './skills.js';
 import { getGlobalSkillsDir, createSkill } from './skills.js';
+import { validateApiKey } from '../providers/deepseek/client.js';
 
 export type SlashCommandResult =
   | { type: 'handled' }
@@ -144,25 +145,9 @@ ${chalk.bold('Other')}
 
 // ── /cost ───────────────────────────────────────────────────────────────────
 
-// DeepSeek pricing (USD per 1M tokens) — updated 2025
-const DEEPSEEK_PRICING: Record<string, { prompt: number; completion: number; cacheHit: number }> = {
-  'deepseek-chat':     { prompt: 0.27, completion: 1.10, cacheHit: 0.07 },
-  'deepseek-v4-flash': { prompt: 0.27, completion: 1.10, cacheHit: 0.07 },
-  'deepseek-v4-pro':   { prompt: 0.27, completion: 1.10, cacheHit: 0.07 },
-  'deepseek-reasoner': { prompt: 0.55, completion: 2.19, cacheHit: 0.14 },
-};
-
-// USD → CNY exchange rate (人民币)
-const USD_TO_CNY = 7.25;
-
-function formatDualCurrency(usdAmount: number): string {
-  const cnyAmount = usdAmount * USD_TO_CNY;
-  return chalk.yellow(`${usdAmount.toFixed(4)}`) + chalk.gray(` (¥${cnyAmount.toFixed(2)} RMB)`);
-}
-
 function printSessionCost(model: string): void {
   const usage = getSessionUsage();
-  const pricing = DEEPSEEK_PRICING[model] ?? DEEPSEEK_PRICING['deepseek-chat'];
+  const pricing = PRICING[model] ?? PRICING['deepseek-chat'];
 
   const inputCost = (usage.inputTokens / 1_000_000) * pricing.prompt;
   const outputCost = (usage.outputTokens / 1_000_000) * pricing.completion;
@@ -232,20 +217,32 @@ async function switchToken(
       console.log(chalk.yellow('API key seems too short. Please check and try again.'));
       return { type: 'handled' };
     }
+    process.stdout.write(chalk.gray('Validating API key…'));
+    const err = await validateApiKey(trimmed, config.baseURL);
+    process.stdout.write('\r' + ' '.repeat(30) + '\r');
+    if (err) {
+      console.log(chalk.red(`✗ ${err} Key not saved.`));
+      return { type: 'handled' };
+    }
     console.log(chalk.green('✓ API key updated'));
     console.log(chalk.gray(`  Key: ${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`));
     return { type: 'config_changed', config: { ...config, apiKey: trimmed } };
   }
 
   // Interactive input (readline for direct text input)
+  // try/finally ensures rl.close() is always called even if the prompt throws.
   const readline = await import('readline');
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const ask = (prompt: string): Promise<string> =>
     new Promise((resolve) => rl.question(prompt, resolve));
 
-  console.log(chalk.gray('Enter your new DeepSeek API key (get one at https://platform.deepseek.com/api_keys):'));
-  const newKey = (await ask(chalk.bold('API Key: '))).trim();
-  rl.close();
+  let newKey = '';
+  try {
+    console.log(chalk.gray('Enter your new DeepSeek API key (get one at https://platform.deepseek.com/api_keys):'));
+    newKey = (await ask(chalk.bold('API Key: '))).trim();
+  } finally {
+    rl.close();
+  }
 
   if (!newKey) {
     console.log(chalk.gray('API key unchanged.'));
@@ -254,6 +251,14 @@ async function switchToken(
 
   if (newKey.length < 10) {
     console.log(chalk.yellow('API key seems too short. Key unchanged.'));
+    return { type: 'handled' };
+  }
+
+  process.stdout.write(chalk.gray('Validating API key…'));
+  const err = await validateApiKey(newKey, config.baseURL);
+  process.stdout.write('\r' + ' '.repeat(30) + '\r');
+  if (err) {
+    console.log(chalk.red(`✗ ${err} Key not saved.`));
     return { type: 'handled' };
   }
 
@@ -839,22 +844,28 @@ async function handleSkills(
       new Promise<string>((resolve) => rl.question(prompt, resolve));
 
     console.log(chalk.gray(`\nCreating skill "${chalk.cyan(name)}" in ${chalk.gray(getGlobalSkillsDir())}\n`));
-    console.log(chalk.gray('Enter a short description (optional, press Enter to skip):'));
-    const desc = (await ask(chalk.bold('Description: '))).trim();
 
-    console.log(chalk.gray('\nEnter the skill content (instructions/prompt that will be sent to the model):'));
-    console.log(chalk.gray('Type your content and press Enter. Multi-line is supported —'));
-    console.log(chalk.gray('just keep typing and press Enter on an empty line to finish.\n'));
+    // try/finally ensures rl.close() is always called even if a prompt throws.
+    let desc = '';
+    let content = '';
+    try {
+      console.log(chalk.gray('Enter a short description (optional, press Enter to skip):'));
+      desc = (await ask(chalk.bold('Description: '))).trim();
 
-    const lines = [];
-    while (true) {
-      const line = await ask('');
-      if (line === '') break;
-      lines.push(line);
+      console.log(chalk.gray('\nEnter the skill content (instructions/prompt that will be sent to the model):'));
+      console.log(chalk.gray('Type your content and press Enter. Multi-line is supported —'));
+      console.log(chalk.gray('just keep typing and press Enter on an empty line to finish.\n'));
+
+      const lines = [];
+      while (true) {
+        const line = await ask('');
+        if (line === '') break;
+        lines.push(line);
+      }
+      content = lines.join('\n').trim();
+    } finally {
+      rl.close();
     }
-    rl.close();
-
-    const content = lines.join('\n').trim();
     if (!content) {
       console.log(chalk.yellow('Skill content cannot be empty. Aborted.'));
       return { type: 'handled' };

@@ -183,7 +183,17 @@ export async function createSkill(name: string, description: string, content: st
   const dir = getGlobalSkillsDir();
   await mkdir(dir, { recursive: true });
 
-  const fileName = name.replace(/\s+/g, '-').toLowerCase() + '.md';
+  // Sanitize the skill name to a safe filename: only allow alphanumerics, hyphens,
+  // and underscores.  This prevents path traversal (e.g. "../evil") and reserved
+  // Windows filenames (e.g. "con", "prn") from causing silent failures.
+  const safeName = name.replace(/[^a-z0-9_-]/gi, '-').toLowerCase();
+  // After sanitization, reject names that are empty or consist only of hyphens
+  // (which means the original name had no valid characters at all).
+  if (!safeName || /^-+$/.test(safeName)) {
+    throw new Error(`Invalid skill name "${name}". Use letters, numbers, hyphens, or underscores.`);
+  }
+
+  const fileName = safeName + '.md';
   const filePath = join(dir, fileName);
 
   const frontmatterLines = [
@@ -268,7 +278,14 @@ export async function installSkillFromZip(zipPath: string): Promise<{ name: stri
 
     if (!relPath) continue;
 
+    // Guard against path traversal: a malicious zip could contain entries like
+    // "../../.bashrc" which would resolve outside skillDir after join().
+    // Reject any entry whose normalized path escapes the skill directory.
     const destPath = join(skillDir, relPath);
+    if (!destPath.startsWith(skillDir + '/') && !destPath.startsWith(skillDir + '\\')) {
+      // Skip silently — don't throw, so a single bad entry doesn't abort the whole install
+      continue;
+    }
     // Ensure parent directory exists
     const destDir = resolve(destPath, '..');
     if (destDir !== skillDir) {

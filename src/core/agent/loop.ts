@@ -52,6 +52,12 @@ function detectSystemLanguage(): 'zh' | 'en' {
   return 'en';
 }
 
+// Read-type tools: acquiring information without side effects.
+// Used by the anti-hallucination check to detect whether the model has
+// grounded itself in project context before making changes.
+const READ_TOOL_NAMES = new Set(['read_file', 'search_files', 'list_directory']);
+const WRITE_TOOL_NAMES = new Set(['write_file', 'edit_file']);
+
 // System prompt is kept stable (no dynamic content) to maximise prompt cache hits.
 // For reasoner (R1) models: system prompt is injected into the first user message
 // because R1 API converts system messages internally anyway.
@@ -90,7 +96,14 @@ ${langInstruction}
 - Follow existing code conventions in the project
 - Write idiomatic code for the language/framework being used
 - Add minimal, targeted comments for non-obvious logic only
-- Handle errors gracefully in production code`;
+- Handle errors gracefully in production code
+
+## Anti-Hallucination Rules
+- NEVER invent APIs, functions, types, imports, or dependencies that don't exist in the project. Before using any library or internal API, you MUST read its definition file or find existing usage in the codebase via search_files.
+- When generating new code, you MUST first find and read at least one existing file that demonstrates the pattern, style, and conventions you plan to follow. Copy-adapt is safer than inventing.
+- Every code change must be traceable to something you actually READ during this session — not your training data. If you haven't read a relevant file yet, read it before writing.
+- If you're unsure whether a function/type/import path exists, use search_files or read_file to verify BEFORE writing code that depends on it.
+- For any non-trivial edit, add a brief comment in the code referencing the file(s) that informed your change (e.g., "// Ref: src/utils/billing.ts L23-45" or "// Following pattern from src/cli/commands.ts").`;
 
   return guide ? base + guide : base;
 }
@@ -134,8 +147,13 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<void> {
     }
   }
 
-  // Reset "yes for all" at the start of each new user turn
+  // Reset per-turn state
   resetYesAll();
+  let hasReadThisTurn = false;
+
+  // Warned-this-turn flag: only inject the anti-hallucination reminder once per
+  // turn to avoid spamming context with repeated warnings.
+  let warnedBlindWrite = false;
 
   // Prepend cwd (and system prompt for reasoner) to the first message of each turn
   const isFirstTurn = context.getMessages().length <= (isReasoner ? 0 : 1);
@@ -300,12 +318,32 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<void> {
         ...(reasoningText ? { reasoning_content: reasoningText } : {}),
       } as ToolCallMessage);
 
+      // ── Anti-hallucination: detect "blind write" pattern ─────────────────
+      // If the model issues write/edit without any read/search/list in the
+      // same batch and hasn't read anything this turn, inject a one-time
+      // reminder. This catches the most common hallucination vector: jumping
+      // straight to generating code without grounding in the codebase.
+      const hasWriteInBatch = toolCalls.some(tc => WRITE_TOOL_NAMES.has(tc.function.name));
+      const hasReadInBatch = toolCalls.some(tc => READ_TOOL_NAMES.has(tc.function.name));
+      if (hasWriteInBatch && !hasReadInBatch && !hasReadThisTurn && !warnedBlindWrite) {
+        warnedBlindWrite = true;
+        const warning = lang === 'zh'
+          ? '⚠️ 检测到直接写入操作：你尚未读取任何项目文件就尝试编辑代码。这极大增加了凭空编造不存在的 API/类型/模式的风险。建议在写入之前先用 read_file 或 search_files 了解现有代码风格和可用的接口。'
+          : '⚠️ Blind write detected: you are attempting to edit code without having read any project files first. This greatly increases the risk of inventing non-existent APIs, types, or patterns. Consider using read_file or search_files to ground yourself before writing.';
+        context.push({ role: 'user', content: warning });
+      }
+
       for (const tc of toolCalls) {
         let parsedArgs: Record<string, unknown> = {};
         try {
           parsedArgs = JSON.parse(tc.function.arguments) as Record<string, unknown>;
         } catch {
           // leave empty
+        }
+
+        // Track reads so subsequent writes in the same turn are considered grounded
+        if (READ_TOOL_NAMES.has(tc.function.name)) {
+          hasReadThisTurn = true;
         }
 
         onToolCall?.(tc.function.name, parsedArgs);

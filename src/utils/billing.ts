@@ -98,29 +98,21 @@ export async function recordUsage(inputTokens: number, outputTokens: number, cac
 }
 
 // ── Exchange rate: USD → CNY ( RMB ) ─────────────────────────────────────
-const USD_TO_CNY = 7.25;
+export const USD_TO_CNY = 7.25;
 
-function formatDualCurrency(usdAmount: number): string {
+export function formatDualCurrency(usdAmount: number): string {
   const cnyAmount = usdAmount * USD_TO_CNY;
   return `${chalk.yellow(`${usdAmount.toFixed(4)}`)} ${chalk.gray(`(¥${cnyAmount.toFixed(2)} RMB)`)}`;
 }
 
 // ── DEEPSEEK pricing (USD per 1M tokens) ──────────────────────────────────
 
-const PRICING: Record<string, { prompt: number; completion: number; cacheHit: number }> = {
+export const PRICING: Record<string, { prompt: number; completion: number; cacheHit: number }> = {
   'deepseek-chat':     { prompt: 0.27, completion: 1.10, cacheHit: 0.07 },
   'deepseek-v4-flash': { prompt: 0.27, completion: 1.10, cacheHit: 0.07 },
   'deepseek-v4-pro':   { prompt: 0.27, completion: 1.10, cacheHit: 0.07 },
   'deepseek-reasoner': { prompt: 0.55, completion: 2.19, cacheHit: 0.14 },
 };
-
-function calcCost(model: string, inputTokens: number, outputTokens: number, cacheHitTokens: number): number {
-  const p = PRICING[model] ?? PRICING['deepseek-chat'];
-  const inputCost = (inputTokens / 1_000_000) * p.prompt;
-  const outputCost = (outputTokens / 1_000_000) * p.completion;
-  const cacheSavings = (cacheHitTokens / 1_000_000) * (p.prompt - p.cacheHit);
-  return inputCost + outputCost - cacheSavings;
-}
 
 // ── Query helpers ─────────────────────────────────────────────────────────
 

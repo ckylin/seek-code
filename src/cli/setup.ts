@@ -5,6 +5,7 @@ import { join } from 'path';
 import chalk from 'chalk';
 import type { SeekCodeConfig } from '../types.js';
 import { selectFromList } from './input.js';
+import { validateApiKey } from '../providers/deepseek/client.js';
 
 const CONFIG_DIR = join(homedir(), '.seekcode');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
@@ -40,12 +41,29 @@ export async function runSetup(existingConfig: SeekCodeConfig): Promise<SeekCode
   );
 
   // ── API Key ──────────────────────────────────────────────────────────────
+  // Wrap the readline loop in try/finally so rl.close() is always called even
+  // if validateApiKey throws or the process is interrupted mid-prompt.
   let apiKey = '';
-  while (!apiKey.trim()) {
-    apiKey = (await ask(chalk.bold('DeepSeek API Key: '))).trim();
-    if (!apiKey) console.log(chalk.yellow('API key cannot be empty.'));
+  try {
+    while (true) {
+      apiKey = (await ask(chalk.bold('DeepSeek API Key: '))).trim();
+      if (!apiKey) {
+        console.log(chalk.yellow('API key cannot be empty.'));
+        continue;
+      }
+      process.stdout.write(chalk.gray('Validating API key…'));
+      const err = await validateApiKey(apiKey, existingConfig.baseURL);
+      if (err) {
+        process.stdout.write('\r' + ' '.repeat(30) + '\r');
+        console.log(chalk.red(`✗ ${err} Please try again.`));
+      } else {
+        process.stdout.write('\r' + ' '.repeat(30) + '\r');
+        break;
+      }
+    }
+  } finally {
+    rl.close();
   }
-  rl.close();
 
   // ── Model selection — arrow-key dropdown ─────────────────────────────────
   console.log();

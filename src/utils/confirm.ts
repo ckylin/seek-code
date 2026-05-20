@@ -128,7 +128,7 @@ function selectFromList(
   title: string,
   items: SelectorItem[],
 ): Promise<string | null> {
-  return new Promise((resolve_p, reject) => {
+  return new Promise((resolve_p) => {
     const { stdin, stdout } = process;
 
     if (!stdin.isTTY) {
@@ -180,11 +180,8 @@ function selectFromList(
     render();
 
     const onData = (key: string): void => {
-      if (key === '\x03') {
-        cleanup();
-        reject(Object.assign(new Error('Interrupted'), { name: 'AbortError' }));
-        return;
-      }
+      // Ctrl+C cancels the selection (same as Esc) — does not exit the process.
+      if (key === '\x03') { cleanup(); resolve_p(null); return; }
       if (key === '\x1B') { cleanup(); resolve_p(null); return; }
       if (key === '\x1B[A') { idx = (idx - 1 + items.length) % items.length; render(); return; }
       if (key === '\x1B[B') { idx = (idx + 1) % items.length; render(); return; }

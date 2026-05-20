@@ -25,32 +25,40 @@ async function loadConfigFile(): Promise<Partial<SeekCodeConfig>> {
   }
 }
 
+/** Parse an integer env var, returning the fallback if the value is missing or NaN. */
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = parseInt(raw, 10);
+  return isNaN(n) ? fallback : n;
+}
+
+/** Parse a float env var, returning the fallback if the value is missing or NaN. */
+function envFloat(name: string, fallback: number): number;
+function envFloat(name: string, fallback: number | undefined): number | undefined;
+function envFloat(name: string, fallback: number | undefined): number | undefined {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = parseFloat(raw);
+  return isNaN(n) ? fallback : n;
+}
+
 export async function loadConfig(): Promise<SeekCodeConfig> {
   const fileConfig = await loadConfigFile();
 
   return {
     provider: process.env.SEEKCODE_PROVIDER ?? fileConfig.provider ?? DEFAULTS.provider,
     model: process.env.SEEKCODE_MODEL ?? fileConfig.model ?? DEFAULTS.model,
-    maxTokens: process.env.SEEKCODE_MAX_TOKENS
-      ? parseInt(process.env.SEEKCODE_MAX_TOKENS, 10)
-      : (fileConfig.maxTokens ?? DEFAULTS.maxTokens),
-    temperature: process.env.SEEKCODE_TEMPERATURE
-      ? parseFloat(process.env.SEEKCODE_TEMPERATURE)
-      : (fileConfig.temperature ?? DEFAULTS.temperature),
+    maxTokens: envInt('SEEKCODE_MAX_TOKENS', fileConfig.maxTokens ?? DEFAULTS.maxTokens),
+    temperature: envFloat('SEEKCODE_TEMPERATURE', fileConfig.temperature ?? DEFAULTS.temperature),
     apiKey: process.env.DEEPSEEK_API_KEY ?? fileConfig.apiKey ?? '',
     baseURL: process.env.SEEKCODE_BASE_URL ?? fileConfig.baseURL ?? DEFAULTS.baseURL,
     reasoningEffort: (process.env.SEEKCODE_REASONING_EFFORT as 'low' | 'medium' | 'high')
       ?? fileConfig.reasoningEffort
       ?? DEFAULTS.reasoningEffort,
-    topP: process.env.SEEKCODE_TOP_P
-      ? parseFloat(process.env.SEEKCODE_TOP_P)
-      : (fileConfig.topP ?? DEFAULTS.topP),
-    frequencyPenalty: process.env.SEEKCODE_FREQUENCY_PENALTY
-      ? parseFloat(process.env.SEEKCODE_FREQUENCY_PENALTY)
-      : (fileConfig.frequencyPenalty ?? DEFAULTS.frequencyPenalty),
-    presencePenalty: process.env.SEEKCODE_PRESENCE_PENALTY
-      ? parseFloat(process.env.SEEKCODE_PRESENCE_PENALTY)
-      : (fileConfig.presencePenalty ?? DEFAULTS.presencePenalty),
+    topP: envFloat('SEEKCODE_TOP_P', fileConfig.topP ?? DEFAULTS.topP),
+    frequencyPenalty: envFloat('SEEKCODE_FREQUENCY_PENALTY', fileConfig.frequencyPenalty ?? DEFAULTS.frequencyPenalty),
+    presencePenalty: envFloat('SEEKCODE_PRESENCE_PENALTY', fileConfig.presencePenalty ?? DEFAULTS.presencePenalty),
   };
 }
 

@@ -69,6 +69,27 @@ async function detectContextFile(cwd: string): Promise<string | null> {
 // Session history shared across calls
 const history: string[] = [];
 
+/** Split a code-point array into visual lines that each fit within maxW display columns. */
+function wrapLine(cps: string[], maxW: number): string[][] {
+  if (cps.length === 0) return [[]];
+  const result: string[][] = [];
+  let current: string[] = [];
+  let currentW = 0;
+  for (const cp of cps) {
+    const cw = stringWidth(cp);
+    if (currentW + cw > maxW && current.length > 0) {
+      result.push(current);
+      current = [cp];
+      currentW = cw;
+    } else {
+      current.push(cp);
+      currentW += cw;
+    }
+  }
+  result.push(current);
+  return result;
+}
+
 export function readMultilineInput(cwd = process.cwd(), model?: string, skills: Skill[] = [], activeSkill?: string): Promise<InputResult> {
   return new Promise((resolve_p, reject) => {
     const { stdin, stdout } = process;
@@ -112,6 +133,16 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
     let contextFile: string | null = null;
 
     const syncBuffer = (): void => { buffer = cpBuf.join(''); };
+
+    // ── Cleanup helper ──────────────────────────────────────────────────────
+    // Every exit path (commit, Ctrl+C, dropdown select) must call cleanup()
+    // before resolving/rejecting the promise.  This guarantees raw mode is
+    // always restored even if an async callback throws after setRawMode(true).
+    const cleanup = (): void => {
+      stdin.setRawMode(false);
+      stdin.pause();
+      stdin.removeListener('data', onData);
+    };
 
     stdin.setRawMode(true);
     stdin.resume();
@@ -215,6 +246,9 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
         : [];
       const numDrop = dropItems.length;
 
+      // Hide cursor during repaint to prevent visible jump to top border.
+      stdout.write('\x1B[?25l');
+
       // Move up to the top of our previously rendered block, then erase downward.
       // linesAboveCursor already includes dropdown rows from the previous render.
       if (linesAboveCursor > 0) stdout.write(`\x1B[${linesAboveCursor}A`);
@@ -242,26 +276,26 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
         }
       }
 
-      // Count terminal rows each logical line occupies (accounts for wrapping).
-      // Full rendered width: 2 (│ ) + prefix + text + padding + 2 ( │) = 4 + content.
-      // When content overflows innerW the right border is pushed past panelW, so
-      // use termW (= panelW + 1) as the wrap divisor.
-      const rowsPerLine = lines.map((l, i) => {
-        const prefix = i === 0 ? PROMPT : CONT_PREFIX;
-        const w = 4 + stringWidth(prefix + l.join(''));
-        return Math.max(1, Math.ceil(w / (panelW + 1)));
-      });
+      // Wrap each logical line into visual lines that fit within availTextW.
+      const availTextW = innerW - PROMPT_W;
+      const visualLinesPerLogical: string[][][] = lines.map(l => wrapLine(l, availTextW));
+      const rowsPerLine = visualLinesPerLogical.map(vls => vls.length);
+
+      // Compute cursor logical position before rendering.
+      const { lineIdx, colIdx } = cursorToLineCol();
 
       // Top border
       stdout.write(chalk.gray('╭' + '─'.repeat(panelW - 2) + '╮') + '\r\n');
 
-      // Input lines (inside panel)
+      // Input lines — each logical line may span multiple visual rows.
       for (let i = 0; i < lines.length; i++) {
-        const prefix = i === 0 ? PROMPT : CONT_PREFIX;
-        const text = lines[i].join('');
-        const lineContent = prefix + text;
-        const padLen = Math.max(0, innerW - stringWidth(lineContent));
-        stdout.write(chalk.gray('│ ') + lineContent + ' '.repeat(padLen) + chalk.gray(' │') + '\r\n');
+        const vls = visualLinesPerLogical[i];
+        for (let j = 0; j < vls.length; j++) {
+          const prefix = (i === 0 && j === 0) ? PROMPT : CONT_PREFIX;
+          const text = vls[j].join('');
+          const padLen = Math.max(0, availTextW - stringWidth(text));
+          stdout.write(chalk.gray('│ ') + prefix + text + ' '.repeat(padLen) + chalk.gray(' │') + '\r\n');
+        }
       }
 
       const BOTTOM_GAP = 1;
@@ -285,16 +319,23 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
         }
       }
 
-      // After writing bottom border + BOTTOM_GAP \r\n's, the cursor sits on the
-      // line after the last gap row.  Move up to the cursor's logical line.
-      const { lineIdx, colIdx } = cursorToLineCol();
-      const cursorPrefix = lineIdx === 0 ? PROMPT : CONT_PREFIX;
-      // Width of content up to cursor on its line (for partial-wrap math).
-      const cursorLineWidth = 4 + stringWidth(cursorPrefix + lines[lineIdx].slice(0, colIdx).join(''));
-      // How many full rows of the cursor line are above the cursor position.
-      const currentLinePartialRows = Math.max(0, Math.ceil(cursorLineWidth / termW) - 1);
-      // Rows of the cursor line that are below the cursor position.
-      const rowsBelowOnCursorLine = Math.max(0, rowsPerLine[lineIdx] - currentLinePartialRows - 1);
+      // After writing bottom border + BOTTOM_GAP \r\n's, move up to the cursor's visual row.
+      // Find which visual line within lines[lineIdx] the cursor falls on.
+      const vls = visualLinesPerLogical[lineIdx];
+      let remaining = colIdx;
+      let visualLineIdx = 0;
+      while (visualLineIdx < vls.length - 1 && remaining >= vls[visualLineIdx].length) {
+        remaining -= vls[visualLineIdx].length;
+        visualLineIdx++;
+      }
+      const visualColIdx = remaining;
+
+      const cursorTextW = stringWidth(vls[visualLineIdx].slice(0, visualColIdx).join(''));
+      const visualCursorCol = 2 + PROMPT_W + cursorTextW;
+
+      // Visual rows of lines[lineIdx] above and below the cursor row.
+      const currentLinePartialRows = visualLineIdx;
+      const rowsBelowOnCursorLine = vls.length - visualLineIdx - 1;
 
       let rowsBelowCursor = rowsBelowOnCursorLine + 1 /* bottom border */ + BOTTOM_GAP + 1 /* line after last \r\n */;
       for (let i = lineIdx + 1; i < lines.length; i++) {
@@ -302,8 +343,7 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
       }
       stdout.write(`\x1B[${rowsBelowCursor}A`);
 
-      // Position cursor horizontally: │ (1) + space (1) + prefix + content before cursor
-      const colW = 2 + stringWidth(cursorPrefix) + stringWidth(lines[lineIdx].slice(0, colIdx).join(''));
+      const colW = visualCursorCol % termW;
       stdout.write('\r' + (colW > 0 ? `\x1B[${colW}C` : ''));
 
       // Rows above cursor in our rendered block (used to erase on next render).
@@ -352,9 +392,7 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
         dropdownVisible = false;
         clearPanel();
         stdout.write('\x1B[?25h');
-        stdin.setRawMode(false);
-        stdin.pause();
-        stdin.removeListener('data', onData);
+        cleanup();
         history.push(selected);
         resolve_p({ text: selected, cancelled: false });
       } else {
@@ -378,7 +416,11 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
       const text = buffer.trim();
 
       if (text === '/') {
-        stdin.removeListener('data', onData);
+        // Hand off to the full-screen selector.  We must stop listening on stdin
+        // before showSlashCommandSelector sets up its own listener, otherwise both
+        // handlers would fire on the same keystrokes.  cleanup() also restores raw
+        // mode so selectFromList can re-enter it cleanly via its own setRawMode(true).
+        cleanup();
         dropdownVisible = false;
         clearPanel();
         void showSlashCommandSelector(skills).then((selected) => {
@@ -392,9 +434,7 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
       dropdownVisible = false;
       clearPanel();
       stdout.write('\x1B[?25h');
-      stdin.setRawMode(false);
-      stdin.pause();
-      stdin.removeListener('data', onData);
+      cleanup();
 
       if (text) history.push(text);
       resolve_p({ text, cancelled: false });
@@ -411,13 +451,11 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
     });
 
     const onData = (key: string): void => {
-      // Ctrl+C — hard exit
+      // Ctrl+C — hard exit; restore terminal state before killing the process
       if (key === '\x03') {
-        stdout.write('\n');
+        clearPanel();
         stdout.write('\x1B[?25h');
-        stdin.setRawMode(false);
-        stdin.pause();
-        stdin.removeListener('data', onData);
+        cleanup();
         process.exit(0);
       }
 
@@ -644,7 +682,7 @@ export function selectFromList(
   items: SelectorItem[],
   currentValue?: string,
 ): Promise<string | null> {
-  return new Promise((resolve_p, reject) => {
+  return new Promise((resolve_p) => {
     const { stdin, stdout } = process;
 
     if (!stdin.isTTY) {
@@ -698,11 +736,11 @@ export function selectFromList(
     render();
 
     const onData = (key: string): void => {
-      if (key === '\x03') {
-        cleanup();
-        reject(Object.assign(new Error('Interrupted'), { name: 'AbortError' }));
-        return;
-      }
+      // Ctrl+C inside a selector cancels the selection (same as Esc).
+      // We do NOT exit the process here — the caller decides what to do with null.
+      // Rejecting with AbortError would require every call site to add a catch,
+      // which is easy to forget and causes unhandled-rejection crashes.
+      if (key === '\x03') { cleanup(); resolve_p(null); return; }
       if (key === '\x1B') { cleanup(); resolve_p(null); return; }
       if (key === '\x1B[A') { idx = (idx - 1 + items.length) % items.length; render(); return; }
       if (key === '\x1B[B') { idx = (idx + 1) % items.length; render(); return; }
