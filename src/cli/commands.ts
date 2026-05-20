@@ -968,7 +968,13 @@ If no issues are found, clearly state that the changes look correct. Be specific
     },
   ];
 
-  process.stdout.write(chalk.gray('Analyzing…'));
+  // Spinner animation while waiting for the first token
+  const spinnerChars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  let spinnerIdx = 0;
+  const spinnerInterval = setInterval(() => {
+    process.stdout.write('\r' + chalk.gray(`${spinnerChars[spinnerIdx]} Analyzing…`));
+    spinnerIdx = (spinnerIdx + 1) % spinnerChars.length;
+  }, 80);
 
   let review = '';
   const md = new MarkdownRenderer();
@@ -981,6 +987,7 @@ If no issues are found, clearly state that the changes look correct. Be specific
     for await (const chunk of stream) {
       if (chunk.type === 'text_delta') {
         if (!review) {
+          clearInterval(spinnerInterval);
           process.stdout.write('\r' + ' '.repeat(20) + '\r');
         }
         review += chunk.text;
@@ -992,6 +999,8 @@ If no issues are found, clearly state that the changes look correct. Be specific
     const flushOut = md.flush();
     if (flushOut) process.stdout.write(flushOut);
   } catch (err) {
+    clearInterval(spinnerInterval);
+    process.stdout.write('\r' + ' '.repeat(20) + '\r');
     console.log(chalk.red('\nFailed to review: ' + (err instanceof Error ? err.message : String(err))));
     return;
   }
