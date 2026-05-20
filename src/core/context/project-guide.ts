@@ -1,8 +1,8 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 
-// Priority order: SEEK.md > CLAUDE.md
-const GUIDE_FILES = ['SEEK.md', 'CLAUDE.md'];
+// Priority order: SEEKCODE.md > CLAUDE.md
+const GUIDE_FILES = ['SEEKCODE.md', 'CLAUDE.md'];
 
 export async function loadProjectGuide(cwd: string): Promise<string | null> {
   for (const filename of GUIDE_FILES) {

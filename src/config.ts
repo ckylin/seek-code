@@ -1,25 +1,46 @@
-import { readFile } from 'fs/promises';
+import { readFile, writeFile, mkdir } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 import type { SeekCodeConfig } from './types.js';
 
+const CONFIG_DIR = join(homedir(), '.seekcode');
+const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
+
 const DEFAULTS: SeekCodeConfig = {
   provider: 'deepseek',
-  model: 'deepseek-v4-flash',
+  model: 'deepseek-v4-pro',
   maxTokens: 8192,
   temperature: 0.2,
   apiKey: '',
   baseURL: 'https://api.deepseek.com',
+  reasoningEffort: 'medium',
 };
 
 async function loadConfigFile(): Promise<Partial<SeekCodeConfig>> {
-  const configPath = join(homedir(), '.seekcode', 'config.json');
   try {
-    const raw = await readFile(configPath, 'utf-8');
+    const raw = await readFile(CONFIG_PATH, 'utf-8');
     return JSON.parse(raw) as Partial<SeekCodeConfig>;
   } catch {
     return {};
   }
+}
+
+/** Parse an integer env var, returning the fallback if the value is missing or NaN. */
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = parseInt(raw, 10);
+  return isNaN(n) ? fallback : n;
+}
+
+/** Parse a float env var, returning the fallback if the value is missing or NaN. */
+function envFloat(name: string, fallback: number): number;
+function envFloat(name: string, fallback: number | undefined): number | undefined;
+function envFloat(name: string, fallback: number | undefined): number | undefined {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = parseFloat(raw);
+  return isNaN(n) ? fallback : n;
 }
 
 export async function loadConfig(): Promise<SeekCodeConfig> {
@@ -28,13 +49,65 @@ export async function loadConfig(): Promise<SeekCodeConfig> {
   return {
     provider: process.env.SEEKCODE_PROVIDER ?? fileConfig.provider ?? DEFAULTS.provider,
     model: process.env.SEEKCODE_MODEL ?? fileConfig.model ?? DEFAULTS.model,
-    maxTokens: process.env.SEEKCODE_MAX_TOKENS
-      ? parseInt(process.env.SEEKCODE_MAX_TOKENS, 10)
-      : (fileConfig.maxTokens ?? DEFAULTS.maxTokens),
-    temperature: process.env.SEEKCODE_TEMPERATURE
-      ? parseFloat(process.env.SEEKCODE_TEMPERATURE)
-      : (fileConfig.temperature ?? DEFAULTS.temperature),
+    maxTokens: envInt('SEEKCODE_MAX_TOKENS', fileConfig.maxTokens ?? DEFAULTS.maxTokens),
+    temperature: envFloat('SEEKCODE_TEMPERATURE', fileConfig.temperature ?? DEFAULTS.temperature),
     apiKey: process.env.DEEPSEEK_API_KEY ?? fileConfig.apiKey ?? '',
     baseURL: process.env.SEEKCODE_BASE_URL ?? fileConfig.baseURL ?? DEFAULTS.baseURL,
+    reasoningEffort: (process.env.SEEKCODE_REASONING_EFFORT as 'low' | 'medium' | 'high')
+      ?? fileConfig.reasoningEffort
+      ?? DEFAULTS.reasoningEffort,
+    topP: envFloat('SEEKCODE_TOP_P', fileConfig.topP ?? DEFAULTS.topP),
+    frequencyPenalty: envFloat('SEEKCODE_FREQUENCY_PENALTY', fileConfig.frequencyPenalty ?? DEFAULTS.frequencyPenalty),
+    presencePenalty: envFloat('SEEKCODE_PRESENCE_PENALTY', fileConfig.presencePenalty ?? DEFAULTS.presencePenalty),
   };
 }
+
+export async function saveConfig(config: SeekCodeConfig): Promise<void> {
+  await mkdir(CONFIG_DIR, { recursive: true });
+  await writeFile(
+    CONFIG_PATH,
+    JSON.stringify(
+      {
+        apiKey: config.apiKey,
+        model: config.model,
+        maxTokens: config.maxTokens,
+        temperature: config.temperature,
+        reasoningEffort: config.reasoningEffort,
+        topP: config.topP,
+        frequencyPenalty: config.frequencyPenalty,
+        presencePenalty: config.presencePenalty,
+      },
+      null,
+      2,
+    ),
+    'utf-8',
+  );
+}
+
+/**
+ * Detect whether the current model is a DeepSeek "pure" reasoner (R1) model.
+ * R1 models do NOT support `temperature`, reject the `system` role, and
+ * require the system prompt to be embedded in the first user message.
+ */
+export function isReasonerModel(model: string): boolean {
+  const lower = model.toLowerCase();
+  return lower.includes('reasoner') || lower.includes('r1');
+}
+
+/**
+ * Detect whether the model supports reasoning/thinking capabilities
+ * (emits reasoning_content, supports reasoning_effort parameter).
+ * This includes R1 reasoner models AND V4 Pro models.
+ */
+export function supportsReasoning(model: string): boolean {
+  const lower = model.toLowerCase();
+  return isReasonerModel(model)
+    || lower.includes('v4')
+    || lower.includes('pro');
+}
+
+/** Reasoner models have a huge context (1M tokens) — give them more room */
+export const CONTEXT_BUDGET = 100_000;
+
+/** Chat model context window is 128K — budget for conversation history */
+export const CHAT_CONTEXT_BUDGET = 90_000;

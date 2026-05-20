@@ -4,64 +4,65 @@
   <img src="./assets/logo.png" alt="Seek Code Logo" width="50%" />
 </p>
 
-> An AI-powered CLI coding assistant for the terminal — built on DeepSeek, extensible to any LLM.
+> 终端原生的 AI 命令行编程助手 — 基于 DeepSeek 构建。
 
 [![npm version](https://img.shields.io/npm/v/seekcode.svg)](https://www.npmjs.com/package/seekcode)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
 
-Seek Code is an open-source, terminal-native AI coding assistant. It reads your codebase, understands context, and helps you write, refactor, debug, and ship code — all from the command line.
+Seek Code 是一个开源的终端原生 AI 编程助手。它能读懂你的代码库、理解上下文，帮助你在命令行中编写、重构、调试和交付代码。
 
 ```bash
-# Interactive REPL
+# 交互式 REPL
 seekcode
 
-# One-shot task
-seekcode "refactor the auth module to use async/await"
+# 单次任务
+seekcode "把 auth 模块重构为 async/await"
 ```
 
 ---
 
-## Features
+## 特性
 
-- **🤖 Agentic coding** — Seek Code can read files, edit code, run shell commands, search codebase, and iterate autonomously on multi-step tasks using a ReAct (Reasoning + Acting) loop
-- **📂 Codebase-aware** — understands your project structure, imports, and conventions via `@` file references and project guide files (`SEEKCODE.md` / `CLAUDE.md`)
-- **🔌 Multi-model support** — ships with DeepSeek V4 Flash & Pro; designed to plug in Doubao, Kimi, OpenAI-compatible, and other providers with minimal config
-- **🛠️ Tool use** — 6 built-in tools: file read/write/edit, shell execution, directory listing, and code search — with diff preview and user confirmation for destructive operations
-- **⚡ Streaming output** — real-time token streaming with reasoning visibility for a responsive terminal experience
-- **🧩 Extensible provider system** — add new LLM backends by implementing a single `LLMProvider` interface
-- **📎 @-references** — inject file contents, directory listings, or web page content directly into your prompt with `@file.ts`, `@src/`, or `@https://example.com`
-- **🎯 Slash commands** — `/init` to auto-generate project guide, `/model` to switch models, `/compact` to compress conversation history, and more
-- **🔒 Safe by default** — destructive operations (write/edit) show a diff preview and require user confirmation before applying
+- **🤖 智能代理** — 使用 ReAct（推理 + 行动）循环，自主执行多步骤任务：读取文件、编辑代码、运行 Shell、搜索代码库
+- **📂 理解代码库** — 通过 `@` 文件引用和项目指南文件（`SEEKCODE.md` / `CLAUDE.md`）理解你的项目结构、模块导入和编码约定
+- **🔌 DeepSeek 驱动** — 内置支持 DeepSeek Chat、V4 Flash、V4 Pro 和 R1 推理模型
+- **🛠️ 工具调用** — 6 个内置工具：文件读写/编辑、Shell 执行、目录列表、代码搜索，破坏性操作会显示 diff 预览并请求用户确认
+- **⚡ 流式输出** — 实时 Token 流式传输，支持 Markdown 渲染和推理过程可见，终端体验流畅
+- **📎 @-引用** — 使用 `@file.ts`、`@src/` 或 `@https://example.com` 将文件内容、目录列表或网页内容直接注入提示词
+- **🎯 斜杠命令** — `/init` 自动生成项目指南、`/model` 切换模型、`/compact` 压缩对话历史、`/review` 审查变更、`/skills` 管理技能等
+- **🔒 默认安全** — 破坏性操作（写入/编辑/Shell）显示 diff 预览并要求用户确认后执行
+- **🔧 技能系统** — 从 `.zip` 文件安装可复用的提示词模板，作为斜杠命令运行
+- **💲 费用追踪** — 使用 `/cost` 和 `/balance` 命令实时查看会话 Token 用量和费用
 
 ---
 
-## Quickstart
+## 快速开始
 
 ```bash
-# Install globally
+# 全局安装
 npm install -g seekcode
 
-# Set your API key
+# 设置 API 密钥
 export DEEPSEEK_API_KEY=your_key_here
 
-# Start an interactive session
+# 启动交互式会话
 seekcode
 
-# One-shot task
-seekcode "explain the architecture of this project"
+# 单次任务
+seekcode "解释这个项目的架构"
 ```
 
-On first run without an API key, Seek Code will launch an interactive setup wizard to guide you through configuration.
+首次运行且未配置 API 密钥时，Seek Code 会启动交互式设置向导引导你完成配置。
 
 ---
 
-## Installation
+## 安装
 
-**Requirements:** Node.js 18+
+**环境要求：** Node.js 18+
 
-### npm (recommended)
+### npm（推荐）
 
 ```bash
 npm install -g seekcode
@@ -73,7 +74,7 @@ npm install -g seekcode
 pnpm add -g seekcode
 ```
 
-### Build from source
+### 从源码构建
 
 ```bash
 git clone https://github.com/your-org/seekcode.git
@@ -85,273 +86,266 @@ npm link
 
 ---
 
-## Usage
+## 使用方法
 
-### Interactive REPL
+### 交互式 REPL
 
 ```bash
 seekcode
 ```
 
-Starts an interactive session with:
+启动交互式会话，提供：
 
-- ASCII art banner showing the model in use
-- `>` prompt for entering tasks
-- Tab completion for file paths (`@`) and slash commands (`/`)
-- Multi-line input support
-- Arrow-key history navigation
+- 显示当前模型的 ASCII 艺术横幅
+- `>` 提示符用于输入任务
+- 文件路径（`@`）和斜杠命令（`/`）的 Tab 补全
+- 多行输入支持
+- 方向键历史记录导航
 
-### One-shot mode
+### 单次任务模式
 
 ```bash
-seekcode "your task description"
+seekcode "你的任务描述"
 ```
 
-Executes a single task and exits. Useful for scripting and quick queries.
+执行单个任务后退出。适用于脚本编写和快速查询。
 
-### Slash Commands
+### 斜杠命令
 
-| Command | Description |
+| 命令 | 描述 |
 |---|---|
-| `/help` | Show help message with all available commands |
-| `/model` | Switch model interactively (arrow-key selector) |
-| `/model <id>` | Switch to a specific model (e.g., `/model deepseek-v4-pro`) |
-| `/init` | Analyze the codebase and generate a `SEEKCODE.md` project guide |
-| `/clear` | Clear conversation context |
-| `/compact` | Summarize and compress conversation history to save tokens |
+| `/help` | 显示帮助信息和所有可用命令 |
+| `/model` | 交互式切换模型（方向键选择器） |
+| `/model <id>` | 切换到指定模型（例如 `/model deepseek-v4-pro`） |
+| `/init` | 分析代码库并生成 `SEEKCODE.md` 项目指南 |
+| `/clear` | 清除对话上下文 |
+| `/compact` | 总结并压缩对话历史以节省 Token |
+| `/review` | 审查本次会话的变更是否有逻辑问题 |
+| `/cost` | 显示会话 Token 使用量和预估费用 |
+| `/balance` | 显示账户余额和用量（今日 / 本月） |
+| `/config` | 显示或修改配置设置 |
+| `/reasoning` / `/effort` | 设置 R1 模型的推理强度（low/medium/high） |
+| `/token` | 更新 DeepSeek API 密钥 |
+| `/skills` | 列出和管理技能（创建、列表） |
+| `/exit` | 退出 Seek Code |
 
-### @-References
+### @-引用
 
-Reference files, directories, or URLs directly in your prompt:
+在提示词中直接引用文件、目录或 URL：
 
-| Syntax | Description | Example |
+| 语法 | 描述 | 示例 |
 |---|---|---|
-| `@<file>` | Inject file contents | `@src/index.ts` |
-| `@<directory>` | Inject directory listing | `@src/components/` |
-| `@<url>` | Fetch and inject webpage content | `@https://example.com` |
+| `@<文件>` | 注入文件内容 | `@src/index.ts` |
+| `@<目录>` | 注入目录列表（最多 20 条） | `@src/components/` |
+| `@<网址>` | 获取并注入网页内容 | `@https://example.com` |
 
-Tab completion is supported for file and directory paths.
+支持文件和目录路径的 Tab 补全。
 
 ---
 
-## Configuration
+## 配置
 
-Seek Code is configured via environment variables or a `~/.seekcode/config.json` file.
+Seek Code 通过环境变量或 `~/.seekcode/config.json` 文件配置。
 
-### Environment variables
+### 环境变量
 
-| Variable | Description | Default |
+| 变量 | 描述 | 默认值 |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | DeepSeek API key | — |
-| `SEEKCODE_MODEL` | Model ID to use | `deepseek-v4-flash` |
-| `SEEKCODE_PROVIDER` | LLM provider | `deepseek` |
-| `SEEKCODE_MAX_TOKENS` | Max tokens per response | `8192` |
-| `SEEKCODE_TEMPERATURE` | Response temperature | `0.2` |
-| `SEEKCODE_BASE_URL` | Custom API base URL | `https://api.deepseek.com` |
+| `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | — |
+| `SEEKCODE_MODEL` | 使用的模型 ID | `deepseek-v4-pro` |
+| `SEEKCODE_PROVIDER` | LLM 提供商 | `deepseek` |
+| `SEEKCODE_MAX_TOKENS` | 每次响应的最大 Token 数 | `8192` |
+| `SEEKCODE_TEMPERATURE` | 响应温度 (0-2) | `0.2` |
+| `SEEKCODE_BASE_URL` | 自定义 API 基础 URL | `https://api.deepseek.com` |
+| `SEEKCODE_REASONING_EFFORT` | R1 推理强度：`low` \| `medium` \| `high` | `medium` |
+| `SEEKCODE_TOP_P` | 核采样 (0-1) | `1` |
+| `SEEKCODE_FREQUENCY_PENALTY` | 重复惩罚 (-2 到 2) | `0` |
+| `SEEKCODE_PRESENCE_PENALTY` | 主题多样性惩罚 (-2 到 2) | `0` |
 
-### Config file (`~/.seekcode/config.json`)
+### 配置文件 (`~/.seekcode/config.json`)
 
 ```json
 {
   "apiKey": "sk-xxxxxxxx",
-  "provider": "deepseek",
   "model": "deepseek-v4-pro",
   "maxTokens": 8192,
   "temperature": 0.2,
-  "baseURL": "https://api.deepseek.com"
+  "reasoningEffort": "medium",
+  "topP": 1,
+  "frequencyPenalty": 0,
+  "presencePenalty": 0
 }
 ```
 
-The config file is auto-generated on first run via the setup wizard. Environment variables take precedence over the config file.
+配置文件在首次运行时通过设置向导自动生成。环境变量优先级高于配置文件。
 
 ---
 
-## Supported Models & Providers
+## 支持的模型
 
-| Provider | Models | Status |
+| 提供商 | 模型 | 状态 |
 |---|---|---|
-| [DeepSeek](https://platform.deepseek.com/) | `deepseek-v4-flash`, `deepseek-v4-pro` | ✅ Supported |
-| [Doubao (豆包)](https://www.volcengine.com/product/doubao) | `doubao-pro-*` | 🔜 Planned |
-| [Kimi (Moonshot)](https://platform.moonshot.cn/) | `moonshot-v1-*` | 🔜 Planned |
-| OpenAI-compatible | Any OpenAI-format endpoint | 🔜 Planned |
-
-### Adding a provider
-
-Implement the `LLMProvider` interface and register it:
-
-```typescript
-import { LLMProvider, Message, StreamChunk, RequestOptions } from 'seekcode';
-
-export class MyProvider implements LLMProvider {
-  readonly id = 'my-provider';
-
-  async *stream(messages: Message[], options: RequestOptions): AsyncIterable<StreamChunk> {
-    // Connect to your LLM API
-    // Yield text_delta, reasoning_delta, tool_call_delta, and finish chunks
-  }
-}
-```
-
-Then wire it up in the CLI entry point (`src/cli/index.ts`):
-
-```typescript
-import { MyProvider } from '../providers/myprovider/provider.js';
-const provider = new MyProvider(config);
-```
+| [DeepSeek](https://platform.deepseek.com/) | `deepseek-chat`、`deepseek-v4-flash`、`deepseek-v4-pro`、`deepseek-reasoner` | ✅ 支持 |
 
 ---
 
-## Architecture
+## 架构
 
 ```
 seekcode/
 ├── src/
-│   ├── cli/                      # CLI entry point, REPL, argument parsing
-│   │   ├── index.ts              # Entry point (commander-based CLI)
-│   │   ├── repl.ts               # Interactive REPL loop
-│   │   ├── input.ts              # Multiline input, tab completion, list selector
-│   │   ├── commands.ts           # Slash commands (/help, /model, /init, etc.)
-│   │   ├── setup.ts              # First-run setup wizard
-│   │   ├── banner.ts             # ASCII art banner
-│   │   └── at-resolver.ts        # @file/@url reference expansion
+│   ├── cli/                      # CLI 入口、REPL、参数解析
+│   │   ├── index.ts              # 入口（commander 驱动）
+│   │   ├── repl.ts               # 交互式 REPL 循环
+│   │   ├── input.ts              # 多行输入、Tab 补全、列表选择器
+│   │   ├── commands.ts           # 斜杠命令（/help, /model, /init 等）
+│   │   ├── setup.ts              # 首次运行设置向导
+│   │   ├── skills.ts             # 技能加载和管理
+│   │   ├── update.ts             # 版本检查和升级
+│   │   ├── banner.ts             # ASCII 艺术横幅
+│   │   └── at-resolver.ts        # @文件/@URL 引用展开
 │   ├── core/
 │   │   ├── agent/
-│   │   │   └── loop.ts           # Agentic loop — the core ReAct reasoning/action cycle
+│   │   │   └── loop.ts           # 代理循环 — 核心 ReAct 推理/行动循环
 │   │   ├── tools/
-│   │   │   ├── registry.ts       # Tool registration and lookup
-│   │   │   ├── executor.ts       # Tool execution with user confirmation
-│   │   │   ├── read_file.ts      # Read file contents
-│   │   │   ├── write_file.ts     # Write content to file
-│   │   │   ├── edit_file.ts      # Replace exact string in file
-│   │   │   ├── execute_shell.ts  # Run shell commands
-│   │   │   ├── list_directory.ts # List directory tree
-│   │   │   └── search_files.ts   # Search text in files
+│   │   │   ├── registry.ts       # 工具注册和查找
+│   │   │   ├── executor.ts       # 工具执行（含用户确认）
+│   │   │   ├── read_file.ts      # 读取文件内容
+│   │   │   ├── write_file.ts     # 写入内容到文件
+│   │   │   ├── edit_file.ts      # 替换文件中的精确字符串
+│   │   │   ├── execute_shell.ts  # 运行 Shell 命令
+│   │   │   ├── list_directory.ts # 列出目录树
+│   │   │   └── search_files.ts   # 在文件中搜索文本
 │   │   └── context/
-│   │       ├── manager.ts        # Context window management (token budget, trimming)
-│   │       └── project-guide.ts  # Load SEEKCODE.md / CLAUDE.md project guides
+│   │       ├── manager.ts        # 上下文窗口管理（Token 预算、裁剪）
+│   │       └── project-guide.ts  # 加载 SEEKCODE.md / CLAUDE.md 项目指南
 │   ├── providers/
 │   │   └── deepseek/
-│   │       ├── provider.ts       # DeepSeek LLM provider implementation
-│   │       └── client.ts         # OpenAI-compatible client factory
+│   │       ├── provider.ts       # DeepSeek LLM 提供商实现
+│   │       └── client.ts         # OpenAI 兼容客户端工厂
 │   ├── utils/
-│   │   ├── display.ts            # Terminal output formatting
-│   │   ├── confirm.ts            # Diff preview and user confirmation
-│   │   └── interrupt.ts          # SIGINT handling
-│   ├── config.ts                 # Configuration loading (env vars, config file)
-│   └── types.ts                  # Shared TypeScript types and interfaces
+│   │   ├── display.ts            # 终端输出格式化
+│   │   ├── confirm.ts            # Diff 预览和用户确认
+│   │   ├── billing.ts            # 余额/用量查询和费用展示
+│   │   ├── markdown.ts           # 流式 Markdown 转终端渲染器
+│   │   └── interrupt.ts          # SIGINT 处理
+│   ├── config.ts                 # 配置加载（环境变量、配置文件）
+│   └── types.ts                  # 共享 TypeScript 类型和接口
 ├── tests/
 │   ├── tools/
 │   │   ├── read_file.test.ts
 │   │   ├── write_file.test.ts
 │   │   └── execute_shell.test.ts
 ├── docs/
-│   ├── development-guide.md      # Development guide (English)
-│   └── development-guide.zh-CN.md # Development guide (Chinese)
+│   ├── development-guide.md      # 开发指南（英文）
+│   ├── development-guide.zh-CN.md # 开发者指南（中文）
+│   └── VERSION.md                # 发版流程指南
 ├── package.json
 ├── tsconfig.json
 ├── vitest.config.ts
-├── CLAUDE.md                     # Project guide for AI coding assistants
-└── README.md                     # This file
+├── SEEKCODE.md                   # Seek Code 项目指南
+├── CLAUDE.md                     # AI 编码助手项目指南
+└── README.md                     # 本文件
 ```
 
-### High-level flow
+### 整体流程
 
 ```
-User input (CLI / REPL)
+用户输入 (CLI / REPL)
        │
        ▼
   ┌─────────────┐
-  │ Agent Loop  │ ◄──── LLM Provider (streaming)
-  │  (loop.ts)  │ ────► Tool Execution
+  │  代理循环    │ ◄──── LLM 提供商（流式）
+  │  (loop.ts)  │ ────► 工具执行
   └──────┬──────┘
          │
     ┌────┴────┐
-    │  Tools  │
-    │ (6)     │
+    │  工具    │
+    │ (6 个)   │
     └─────────┘
 ```
 
-### Agent Loop (`src/core/agent/loop.ts`)
+### 代理循环 (`src/core/agent/loop.ts`)
 
-The agent loop is the core of Seek Code. It follows a ReAct (Reasoning + Acting) pattern:
+代理循环是 Seek Code 的核心，遵循 ReAct（推理 + 行动）模式：
 
-1. **System prompt** is built once per session (stays stable to maximize prompt cache hits)
-2. **User message** is prefixed with `[cwd]` and `[date]` for context
-3. **Streaming response** from the LLM — handles text deltas, reasoning deltas, and tool call deltas
-4. **If tool calls are received**, each tool is executed and results are fed back to the LLM
-5. **If text response** (finish_reason = "stop"), output to user and end
-6. **Loops** up to 30 iterations for multi-step tasks
+1. **系统提示**在每次会话中构建一次（保持稳定以最大化提示缓存命中率）
+2. **用户消息**附加 `[cwd]` 和 `[date]` 前缀以提供上下文
+3. **流式响应**来自 LLM — 处理文本增量、推理增量和工具调用增量
+4. **如果收到工具调用**，执行每个工具并将结果反馈给 LLM
+5. **如果是文本响应**（finish_reason = "stop"），输出给用户并结束
+6. **循环**最多 30 次迭代以处理多步骤任务
 
-Key design decisions:
+关键设计决策：
 
-- **System prompt stability**: The system prompt is built once and never changes during a session. This maximizes DeepSeek's prompt cache hit rate.
-- **Context management**: `ContextManager` tracks token usage and trims old messages when budget is exceeded.
-- **Streaming-first**: All LLM communication is streamed via `AsyncIterable`, enabling real-time terminal output.
+- **系统提示稳定性**：系统提示只构建一次，会话期间不会更改。这最大化 DeepSeek 的提示缓存命中率。
+- **上下文管理**：`ContextManager` 跟踪 Token 使用情况，超出预算时裁剪旧消息。
+- **流式优先**：所有 LLM 通信通过 `AsyncIterable` 流式传输，实现实时终端输出。
 
-### Tool System
+### 工具系统
 
-Tools are how the LLM interacts with the user's environment. Each tool implements the `Tool` interface.
+工具是 LLM 与用户环境交互的方式。每个工具实现 `Tool` 接口。
 
-| Tool | Description |
+| 工具 | 描述 |
 |---|---|
-| `read_file` | Read file contents (truncated at 8000 chars) |
-| `write_file` | Write content to file (auto-creates directories) |
-| `edit_file` | Replace an exact string in a file |
-| `execute_shell` | Run a shell command (with timeout) |
-| `list_directory` | List directory tree (configurable depth) |
-| `search_files` | Search for a text pattern in files |
+| `read_file` | 读取文件内容（截断至 30,000 字符） |
+| `write_file` | 写入内容到文件（自动创建目录） |
+| `edit_file` | 替换文件中的精确字符串 |
+| `execute_shell` | 运行 Shell 命令（带超时） |
+| `list_directory` | 列出目录树（可配置深度） |
+| `search_files` | 在文件中搜索文本模式 |
 
-**Safety**: Before destructive operations (`write_file`, `edit_file`), the executor shows a diff preview and asks for user confirmation with options: Yes, Yes for all (permanent), Yes for all (session), or No.
+**安全机制**：在执行破坏性操作（`write_file`、`edit_file`、`execute_shell`）之前，执行器会显示 diff 预览并请求用户确认，提供三个选项：是、本次会话全部允许、否。
 
-### Context Management (`src/core/context/manager.ts`)
+### 上下文管理 (`src/core/context/manager.ts`)
 
-The `ContextManager` maintains conversation history:
+`ContextManager` 维护对话历史：
 
-- **Token estimation**: Uses a simple 4:1 character-to-token ratio
-- **Trimming**: When estimated tokens exceed budget, removes oldest non-system messages
-- **Budget**: Defaults to `maxTokens * 7`
+- **Token 估算**：使用简单的 4:1 字符与 Token 比率
+- **裁剪**：当估算 Token 数超过预算时，移除最旧的非系统消息
+- **预算**：聊天模型默认 90,000 Token，推理模型 100,000 Token（1M 上下文窗口）
 
-### Provider System
+### 提供商系统
 
-All LLM backends implement the `LLMProvider` interface. The `StreamChunk` discriminated union supports:
+DeepSeek 提供商实现 `LLMProvider` 接口。`StreamChunk` 判别联合类型支持：
 
-- `text_delta` — incremental text output
-- `reasoning_delta` — chain-of-thought reasoning (shown as "Thinking...")
-- `tool_call_delta` — streaming tool call arguments
-- `finish` — stream end with finish reason
+- `text_delta` — 增量文本输出
+- `reasoning_delta` — 思维链推理（显示为 "Thinking..."）
+- `tool_call_delta` — 流式工具调用参数
+- `finish` — 流结束，包含结束原因
 
 ---
 
-## Development
+## 开发
 
-### Commands
+### 命令
 
 ```bash
-npm run dev        # dev mode with watch (tsx)
-npm run build      # compile TypeScript to dist/
-npm run typecheck  # type check only, no emit
-npm test           # run vitest test suite
-npm start          # run compiled dist/cli/index.js
+npm run dev        # 开发模式，热重载 (tsx)
+npm run build      # 编译 TypeScript 到 dist/
+npm run typecheck  # 仅类型检查，不输出文件
+npm test           # 运行 vitest 测试套件
+npm start          # 运行编译后的 dist/cli/index.js
 
-# Run a single test file
+# 运行单个测试文件
 npx vitest run tests/tools/read_file.test.ts
 ```
 
-### Project Structure
+### 项目结构
 
-- `src/cli/` — entry point, REPL loop, argument parsing
-- `src/core/agent/` — agentic loop and task planning
-- `src/core/tools/` — file read/write, shell execution, search tool implementations
-- `src/core/context/` — codebase indexing and context window management
-- `src/providers/` — LLM provider adapters implementing a shared `LLMProvider` interface
-- `src/utils/` — shared utilities
+- `src/cli/` — 入口、REPL 循环、参数解析、技能、更新
+- `src/core/agent/` — 代理循环和任务规划
+- `src/core/tools/` — 文件读写、Shell 执行、搜索工具实现
+- `src/core/context/` — 上下文窗口管理和项目指南加载
+- `src/providers/` — LLM 提供商适配器，实现共享的 `LLMProvider` 接口
+- `src/utils/` — 共享工具（显示、确认、计费、Markdown、中断）
 
-For detailed development instructions, see:
-- [Development Guide (English)](docs/development-guide.md)
-- [开发者指南 (中文)](docs/development-guide.zh-CN.md)
+详细开发说明请参阅：
+- [开发指南（英文）](docs/development-guide.md)
+- [开发者指南（中文）](docs/development-guide.zh-CN.md)
 
 ---
 
-## License
+## 许可证
 
 MIT

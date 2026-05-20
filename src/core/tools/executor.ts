@@ -7,9 +7,7 @@ import { confirmEdit, applyEdit } from '../../utils/confirm.js';
 import type { ConfirmChoice } from '../../utils/confirm.js';
 
 // Module-level state for "yes for all" across tool calls
-// yesAll — persists forever (never resets)
 // yesAllSession — resets at the start of each new user turn
-let yesAllActive = false;
 let yesAllSessionActive = false;
 
 export function resetYesAll(): void {
@@ -17,14 +15,9 @@ export function resetYesAll(): void {
 }
 
 async function confirmOrSkip(filePath: string, newContent: string): Promise<boolean> {
-  if (yesAllActive) return true;
   if (yesAllSessionActive) return true;
 
   const choice: ConfirmChoice = await confirmEdit(filePath, newContent);
-  if (choice === 'yes_all') {
-    yesAllActive = true;
-    return true;
-  }
   if (choice === 'yes_all_session') {
     yesAllSessionActive = true;
     return true;
@@ -49,6 +42,24 @@ export async function executeTool(
     return { success: false, output: '', error: `Invalid JSON arguments for tool ${name}: ${argsJson}` };
   }
 
+  // Validate required parameters for each tool to avoid confusing Node.js errors
+  // (e.g., path.resolve(undefined) → "paths[0] must be of type string")
+  const requiredParams: Record<string, string[]> = {
+    read_file: ['path'],
+    write_file: ['path', 'content'],
+    edit_file: ['path', 'old_string', 'new_string'],
+    execute_shell: ['command'],
+    search_files: ['pattern'],
+  };
+  const required = requiredParams[name];
+  if (required) {
+    for (const p of required) {
+      if (args[p] === undefined || args[p] === null) {
+        return { success: false, output: '', error: `Missing required parameter "${p}" for tool ${name}` };
+      }
+    }
+  }
+
   // Show diff and require confirmation before writing files
   if (name === 'edit_file') {
     const filePath = resolve(args.path as string);
@@ -61,14 +72,14 @@ export async function executeTool(
     }
     const accepted = await confirmOrSkip(filePath, preview);
     if (!accepted) {
-      return { success: false, output: '', error: 'Edit rejected by user.' };
+      return { success: false, output: '', error: 'Edit rejected by user.', userRejected: true };
     }
   } else if (name === 'write_file') {
     const filePath = resolve(args.path as string);
     const content = args.content as string;
     const accepted = await confirmOrSkip(filePath, content);
     if (!accepted) {
-      return { success: false, output: '', error: 'Write rejected by user.' };
+      return { success: false, output: '', error: 'Write rejected by user.', userRejected: true };
     }
   }
 

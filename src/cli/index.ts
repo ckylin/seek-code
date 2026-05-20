@@ -1,13 +1,16 @@
 #!/usr/bin/env node
+process.title = 'Seek Code';
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { loadConfig } from '../config.js';
+import { loadConfig, supportsReasoning, CHAT_CONTEXT_BUDGET, CONTEXT_BUDGET } from '../config.js';
 import { DeepSeekProvider } from '../providers/deepseek/provider.js';
+import { ContextManager } from '../core/context/manager.js';
 import { startRepl } from './repl.js';
 import { runAgentLoop } from '../core/agent/loop.js';
 import { createInterruptController } from '../utils/interrupt.js';
 import { printError } from '../utils/display.js';
 import { runSetup } from './setup.js';
+import { installSkillFromZip, removeSkill, getGlobalSkillsDir } from './skills.js';
 
 const program = new Command();
 
@@ -32,6 +35,8 @@ program
 
     if (task) {
       // One-shot mode
+      const budget = supportsReasoning(config.model) ? CONTEXT_BUDGET : CHAT_CONTEXT_BUDGET;
+      const context = new ContextManager(budget);
       const interrupt = createInterruptController();
       try {
         await runAgentLoop({
@@ -39,6 +44,7 @@ program
           cwd: process.cwd(),
           config,
           provider,
+          context,
           signal: interrupt.signal,
         });
         process.stdout.write('\n');
@@ -55,6 +61,74 @@ program
     } else {
       // Interactive REPL mode
       await startRepl(config, provider);
+    }
+  });
+
+program
+  .command('update')
+  .description('Check for updates and upgrade to the latest version')
+  .option('-c, --check', 'Only check for updates, do not install')
+  .option('-y, --yes', 'Skip confirmation prompt')
+  .action(async (opts: { check?: boolean; yes?: boolean }) => {
+    const { runUpdate } = await import('./update.js');
+    await runUpdate({ confirm: opts.yes ?? false, checkOnly: opts.check ?? false });
+  });
+
+program
+  .command('skills')
+  .description('Manage skills (add, remove, list)')
+  .argument('<action>', 'Action: add | remove | list')
+  .argument('[name]', 'Skill name (for remove) or zip path (for add with -f)')
+  .option('-f, --file <path>', 'Install a skill from a .zip file')
+  .action(async (action: string, name: string | undefined, opts: { file?: string }) => {
+    if (action === 'add' || action === 'install') {
+      const zipPath = opts.file || name;
+      if (!zipPath) {
+        console.log(chalk.yellow('Usage: seekcode skills add -f <path-to-skill.zip>'));
+        process.exit(1);
+      }
+      try {
+        const result = await installSkillFromZip(zipPath);
+        console.log(chalk.green(`\n✓ Skill "${result.name}" installed (${result.fileCount} files)`));
+        console.log(chalk.gray(`  Directory: ${getGlobalSkillsDir()}/${result.name}`));
+        console.log(chalk.gray(`  Start Seek Code and use /${result.name} to run it.`));
+      } catch (err) {
+        console.log(chalk.red('\nFailed to install skill: ' + (err instanceof Error ? err.message : String(err))));
+        process.exit(1);
+      }
+    } else if (action === 'remove' || action === 'rm') {
+      if (!name || name.startsWith('-')) {
+        console.log(chalk.yellow('Usage: seekcode skills remove <skill-name>'));
+        process.exit(1);
+      }
+      try {
+        await removeSkill(name);
+        console.log(chalk.green(`\n✓ Skill "${name}" removed.`));
+        console.log(chalk.gray(`  Global dir: ${getGlobalSkillsDir()}`));
+      } catch (err) {
+        console.log(chalk.red('\nFailed to remove skill: ' + (err instanceof Error ? err.message : String(err))));
+        process.exit(1);
+      }
+    } else if (action === 'list' || action === 'ls') {
+      const { loadSkills } = await import('./skills.js');
+      const skills = await loadSkills(process.cwd());
+      if (skills.length === 0) {
+        console.log(chalk.gray('No skills installed.'));
+        console.log(chalk.gray(`Global skills dir: ${getGlobalSkillsDir()}`));
+      } else {
+        console.log(chalk.bold(`\nSkills (${skills.length})\n`));
+        const maxLen = Math.max(...skills.map((s) => s.name.length));
+        for (const skill of skills) {
+          const src = skill.source === 'project' ? chalk.blue('[project]') : chalk.gray('[global]');
+          const desc = skill.description ? chalk.gray(` — ${skill.description}`) : '';
+          console.log(`  ${chalk.cyan(skill.name.padEnd(maxLen))}  ${src}${desc}`);
+        }
+        console.log('');
+      }
+    } else {
+      console.log(chalk.yellow(`Unknown action: ${action}`));
+      console.log(chalk.gray('Available: skills add -f <path> | skills remove <name> | skills list'));
+      process.exit(1);
     }
   });
 

@@ -109,7 +109,7 @@ function relPath(filePath: string): string {
   return filePath.startsWith(cwd) ? filePath.slice(cwd.length).replace(/^[\\/]/, '') : filePath;
 }
 
-export type ConfirmChoice = 'yes' | 'yes_all' | 'yes_all_session' | 'no';
+export type ConfirmChoice = 'yes' | 'yes_all_session' | 'no';
 
 // ── Arrow-key selector for confirm choices ──────────────────────────────────
 
@@ -128,7 +128,7 @@ function selectFromList(
   title: string,
   items: SelectorItem[],
 ): Promise<string | null> {
-  return new Promise((resolve_p, reject) => {
+  return new Promise((resolve_p) => {
     const { stdin, stdout } = process;
 
     if (!stdin.isTTY) {
@@ -180,11 +180,8 @@ function selectFromList(
     render();
 
     const onData = (key: string): void => {
-      if (key === '\x03') {
-        cleanup();
-        reject(Object.assign(new Error('Interrupted'), { name: 'AbortError' }));
-        return;
-      }
+      // Ctrl+C cancels the selection (same as Esc) — does not exit the process.
+      if (key === '\x03') { cleanup(); resolve_p(null); return; }
       if (key === '\x1B') { cleanup(); resolve_p(null); return; }
       if (key === '\x1B[A') { idx = (idx - 1 + items.length) % items.length; render(); return; }
       if (key === '\x1B[B') { idx = (idx + 1) % items.length; render(); return; }
@@ -200,8 +197,7 @@ function selectFromList(
 async function promptConfirm(): Promise<ConfirmChoice> {
   const items: SelectorItem[] = [
     { value: 'yes', label: 'Yes — 接受这次修改' },
-    { value: 'yes_all', label: 'Yes for all — 所有类似修改都自动接受（永久）' },
-    { value: 'yes_all_session', label: 'Yes for all in this session — 本次会话中所有类似修改都自动接受' },
+    { value: 'yes_all_session', label: 'Yes for all — 本次会话中所有类似修改都自动接受' },
     { value: 'no', label: 'No — 拒绝这次修改' },
   ];
 
@@ -220,27 +216,29 @@ export async function confirmEdit(filePath: string, newContent: string): Promise
   const hunks = computeDiff(oldLines, newLines);
   const { added, removed } = countChanges(hunks);
 
-  const cols = process.stdout.columns || 80;
-  const divider = chalk.gray('─'.repeat(cols));
+  const cols = Math.min(process.stdout.columns || 80, 80);
   const isNew = !exists;
-  const label = isNew ? chalk.green('  ⊕ ') : chalk.yellow('  ⎿  ');
+  const fileLabel = (isNew ? chalk.green('⊕ ') : chalk.yellow('✎ ')) + chalk.bold(relPath(absPath));
   const stats = added > 0 || removed > 0
-    ? chalk.gray(' (') + chalk.green(`+${added}`) + chalk.gray(' ') + chalk.red(`-${removed}`) + chalk.gray(')')
+    ? '  ' + chalk.green(`+${added}`) + ' ' + chalk.red(`-${removed}`)
     : '';
+  const headerText = fileLabel + stats;
+  // Strip ANSI for length calculation
+  const headerPlain = (isNew ? '⊕ ' : '✎ ') + relPath(absPath) + (added > 0 || removed > 0 ? `  +${added} -${removed}` : '');
+  const topFill = Math.max(0, cols - 2 - headerPlain.length - 2);
+  const topBorder = chalk.gray('╭─ ') + headerText + chalk.gray(' ' + '─'.repeat(topFill) + '╮');
 
-  process.stdout.write('\n');
-  process.stdout.write(label + chalk.bold(relPath(absPath)) + stats + '\n');
+  process.stdout.write('\n' + topBorder + '\n');
 
-  // Terminal inline diff
   if (hunks.length === 0 && !isNew) {
-    process.stdout.write(chalk.gray('  (no changes)\n'));
+    process.stdout.write(chalk.gray('│  (no changes)') + '\n');
   } else {
-    process.stdout.write(divider + '\n');
     for (const line of renderDiff(hunks, oldLines.length, newLines.length)) {
-      process.stdout.write(line + '\n');
+      process.stdout.write(chalk.gray('│') + line + '\n');
     }
-    process.stdout.write(divider + '\n');
   }
+
+  process.stdout.write(chalk.gray('╰' + '─'.repeat(cols - 2) + '╯') + '\n');
 
   return promptConfirm();
 }

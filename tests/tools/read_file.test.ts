@@ -32,7 +32,7 @@ describe('read_file', () => {
 
   it('truncates large files', async () => {
     const filePath = join(dir, 'large.txt');
-    await writeFile(filePath, 'x'.repeat(10_000));
+    await writeFile(filePath, 'x'.repeat(40_000));
     const result = await readFileTool.execute({ path: filePath });
     expect(result.success).toBe(true);
     expect(result.output).toContain('truncated');
