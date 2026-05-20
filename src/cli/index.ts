@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-process.title = 'Seek Code';
+process.title = 'CodeGrunt';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { loadConfig, supportsReasoning, CHAT_CONTEXT_BUDGET, CONTEXT_BUDGET } from '../config.js';
@@ -15,7 +15,7 @@ import { installSkillFromZip, removeSkill, getGlobalSkillsDir } from './skills.j
 const program = new Command();
 
 program
-  .name('seekcode')
+  .name('codegrunt')
   .description('AI-powered CLI coding assistant')
   .version('0.1.0')
   .argument('[task]', 'One-shot task to execute (omit for interactive mode)')
@@ -84,21 +84,21 @@ program
     if (action === 'add' || action === 'install') {
       const zipPath = opts.file || name;
       if (!zipPath) {
-        console.log(chalk.yellow('Usage: seekcode skills add -f <path-to-skill.zip>'));
+        console.log(chalk.yellow('Usage: codegrunt skills add -f <path-to-skill.zip>'));
         process.exit(1);
       }
       try {
         const result = await installSkillFromZip(zipPath);
         console.log(chalk.green(`\n✓ Skill "${result.name}" installed (${result.fileCount} files)`));
         console.log(chalk.gray(`  Directory: ${getGlobalSkillsDir()}/${result.name}`));
-        console.log(chalk.gray(`  Start Seek Code and use /${result.name} to run it.`));
+        console.log(chalk.gray(`  Start CodeGrunt and use /${result.name} to run it.`));
       } catch (err) {
         console.log(chalk.red('\nFailed to install skill: ' + (err instanceof Error ? err.message : String(err))));
         process.exit(1);
       }
     } else if (action === 'remove' || action === 'rm') {
       if (!name || name.startsWith('-')) {
-        console.log(chalk.yellow('Usage: seekcode skills remove <skill-name>'));
+        console.log(chalk.yellow('Usage: codegrunt skills remove <skill-name>'));
         process.exit(1);
       }
       try {

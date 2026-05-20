@@ -17,7 +17,7 @@ npx vitest run tests/tools/read_file.test.ts
 
 ## Architecture
 
-Seek Code is a terminal-native agentic coding assistant. The intended structure:
+CodeGrunt is a terminal-native agentic coding assistant. The intended structure:
 
 - `src/cli/` — entry point, REPL loop, argument parsing, slash commands, skills, @-reference resolver
 - `src/core/agent/` — agentic ReAct loop and task planning
@@ -41,17 +41,17 @@ The project ships with the **DeepSeek** provider (`src/providers/deepseek/`), wh
 
 ## Configuration
 
-Runtime config via env vars or `~/.seekcode/config.json`:
+Runtime config via env vars or `~/.codegrunt/config.json`:
 
 - `DEEPSEEK_API_KEY` — required for the default DeepSeek provider
-- `SEEKCODE_MODEL` — model ID (default: `deepseek-v4-pro`)
-- `SEEKCODE_PROVIDER` — provider ID (default: `deepseek`)
-- `SEEKCODE_MAX_TOKENS` — max tokens per response (default: `8192`)
-- `SEEKCODE_TEMPERATURE` — response temperature (default: `0.2`)
-- `SEEKCODE_BASE_URL` — API base URL (default: `https://api.deepseek.com`)
-- `SEEKCODE_REASONING_EFFORT` — R1 reasoning effort: `low` | `medium` | `high`
-- `SEEKCODE_TOP_P` — nucleus sampling (default: `1`)
-- `SEEKCODE_FREQUENCY_PENALTY` — repetition penalty (default: `0`)
-- `SEEKCODE_PRESENCE_PENALTY` — topic diversity penalty (default: `0`)
+- `CODEGRUNT_MODEL` — model ID (default: `deepseek-v4-pro`)
+- `CODEGRUNT_PROVIDER` — provider ID (default: `deepseek`)
+- `CODEGRUNT_MAX_TOKENS` — max tokens per response (default: `8192`)
+- `CODEGRUNT_TEMPERATURE` — response temperature (default: `0.2`)
+- `CODEGRUNT_BASE_URL` — API base URL (default: `https://api.deepseek.com`)
+- `CODEGRUNT_REASONING_EFFORT` — R1 reasoning effort: `low` | `medium` | `high`
+- `CODEGRUNT_TOP_P` — nucleus sampling (default: `1`)
+- `CODEGRUNT_FREQUENCY_PENALTY` — repetition penalty (default: `0`)
+- `CODEGRUNT_PRESENCE_PENALTY` — topic diversity penalty (default: `0`)
 
 Config file is created on first run via the setup wizard (`src/cli/setup.ts`).

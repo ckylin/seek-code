@@ -72,7 +72,7 @@ function buildSystemPrompt(guide: string | null, language: 'zh' | 'en'): string 
     : `## Language
 - Respond in English only.`;
 
-  const base = `You are Seek Code, an expert AI coding assistant running in the terminal. You are powered by DeepSeek, optimized for software engineering tasks.
+  const base = `You are CodeGrunt, an expert AI coding assistant running in the terminal. You are powered by DeepSeek, optimized for software engineering tasks.
 
 You have access to tools that let you read files, write files, edit files, run shell commands, list directories, and search code. Use them to complete the user's task.
 

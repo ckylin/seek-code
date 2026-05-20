@@ -86,8 +86,8 @@ export function printUserMessage(text: string): void {
 
 export function printAssistantHeader(): void {
   const cols = process.stdout.columns || 80;
-  const label = ' ' + blue('Seek Code') + ' ';
-  const labelLen = ' Seek Code '.length;
+  const label = ' ' + blue('CodeGrunt') + ' ';
+  const labelLen = ' CodeGrunt '.length;
   const fill = Math.max(0, cols - labelLen - 2);
   const half = Math.floor(fill / 2);
   process.stdout.write(

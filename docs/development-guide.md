@@ -1,6 +1,6 @@
-# Seek Code — Development Guide
+# CodeGrunt — Development Guide
 
-> How to build, test, and contribute to Seek Code from source.
+> How to build, test, and contribute to CodeGrunt from source.
 
 ---
 
@@ -42,8 +42,8 @@ Optional but recommended:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-org/seekcode.git
-cd seekcode
+git clone https://github.com/your-org/codegrunt.git
+cd codegrunt
 ```
 
 ### 2. Install Dependencies
@@ -76,14 +76,14 @@ You should see the CLI help output. If you see `Error: No API key configured`, t
 npm link
 ```
 
-Now you can run `seekcode` from anywhere in your terminal.
+Now you can run `codegrunt` from anywhere in your terminal.
 
 ---
 
 ## Project Structure
 
 ```
-seekcode/
+codegrunt/
 ├── src/
 │   ├── cli/                  # CLI entry point, REPL, argument parsing
 │   │   ├── index.ts          # Entry point (commander-based CLI)
@@ -109,7 +109,7 @@ seekcode/
 │   │   │   └── search_files.ts
 │   │   └── context/
 │   │       ├── manager.ts    # Context window management (token budget, trimming)
-│   │       └── project-guide.ts  # Load SEEKCODE.md / CLAUDE.md project guides
+│   │       └── project-guide.ts  # Load CODEGRUNT.md / CLAUDE.md project guides
 │   ├── providers/
 │   │   └── deepseek/
 │   │       ├── provider.ts   # DeepSeek LLM provider implementation
@@ -132,7 +132,7 @@ seekcode/
 ├── package.json
 ├── tsconfig.json
 ├── vitest.config.ts
-├── SEEKCODE.md               # Project guide for Seek Code
+├── CODEGRUNT.md               # Project guide for CodeGrunt
 ├── CLAUDE.md                 # Project guide for AI coding assistants
 └── README.md
 ```
@@ -143,7 +143,7 @@ seekcode/
 
 ### Compilation
 
-Seek Code uses the standard TypeScript compiler (`tsc`) for production builds.
+CodeGrunt uses the standard TypeScript compiler (`tsc`) for production builds.
 
 ```bash
 npm run build          # Compile src/ → dist/
@@ -248,7 +248,7 @@ Then open `chrome://inspect` in Chrome and click "Open dedicated DevTools for No
 
 #### Using console.error for Debug Output
 
-Since Seek Code's tool output is communicated via stdout, use `console.error()` for debug output — it goes to stderr and won't interfere with tool output parsing:
+Since CodeGrunt's tool output is communicated via stdout, use `console.error()` for debug output — it goes to stderr and won't interfere with tool output parsing:
 
 ```typescript
 // ✅ Correct: use console.error for debugging
@@ -260,9 +260,9 @@ console.log('[Debug] Tool params:', params);
 
 #### Debugging the Agent Loop
 
-The agent loop (`src/core/agent/loop.ts`) is the core of Seek Code. When debugging the agent loop, focus on these key areas:
+The agent loop (`src/core/agent/loop.ts`) is the core of CodeGrunt. When debugging the agent loop, focus on these key areas:
 
-1. **System prompt construction**: Verify the system prompt correctly includes project guide (SEEKCODE.md/CLAUDE.md) content
+1. **System prompt construction**: Verify the system prompt correctly includes project guide (CODEGRUNT.md/CLAUDE.md) content
 2. **Message history**: Print the current message list in `ContextManager` to confirm context trimming works correctly
 3. **Tool call parsing**: Check that tool_call parameters from the LLM are parsed correctly
 4. **Streaming output**: Confirm that stream chunks (text_delta, reasoning_delta, tool_call_delta) are handled correctly
@@ -393,7 +393,7 @@ describe('read_file', () => {
   it('reads an existing file', async () => {
     const result = await readFileTool.execute({ path: 'package.json' });
     expect(result.success).toBe(true);
-    expect(result.output).toContain('"name": "seekcode"');
+    expect(result.output).toContain('"name": "codegrunt"');
   });
 
   it('returns error for non-existent file', async () => {
@@ -427,7 +427,7 @@ User Input (CLI / REPL)
 
 ### Agent Loop (`src/core/agent/loop.ts`)
 
-The agent loop is the heart of Seek Code. It follows a **ReAct** (Reasoning + Acting) pattern:
+The agent loop is the heart of CodeGrunt. It follows a **ReAct** (Reasoning + Acting) pattern:
 
 1. **System prompt** is constructed once per session (stable for prompt cache hits).
 2. **User message** is appended with `[cwd]` and `[date]` prefix.
@@ -639,13 +639,13 @@ describe('my_tool', () => {
 
 ## Slash Commands
 
-Seek Code provides a set of slash commands available in the interactive REPL. These are implemented in `src/cli/commands.ts`.
+CodeGrunt provides a set of slash commands available in the interactive REPL. These are implemented in `src/cli/commands.ts`.
 
 | Command | Description |
 |---|---|
 | `/help` | Show available commands and current configuration |
 | `/model <name>` | Switch the active LLM model (interactive if no name) |
-| `/init` | Analyze the codebase and generate a SEEKCODE.md project guide |
+| `/init` | Analyze the codebase and generate a CODEGRUNT.md project guide |
 | `/clear` | Clear the conversation history |
 | `/compact` | Summarize and compress conversation history to save tokens |
 | `/review` | Review session changes for logic issues |
@@ -661,26 +661,26 @@ Seek Code provides a set of slash commands available in the interactive REPL. Th
 
 ## @-Reference Syntax
 
-Seek Code supports `@`-references in the REPL and one-shot mode, implemented in `src/cli/at-resolver.ts`. This lets you reference files and URLs directly in your prompt.
+CodeGrunt supports `@`-references in the REPL and one-shot mode, implemented in `src/cli/at-resolver.ts`. This lets you reference files and URLs directly in your prompt.
 
 ### File References
 
 ```bash
 # Reference a file — its content is inlined into the prompt
-seekcode "explain @src/core/agent/loop.ts"
+codegrunt "explain @src/core/agent/loop.ts"
 
 # Reference multiple files
-seekcode "compare @src/config.ts and @src/types.ts"
+codegrunt "compare @src/config.ts and @src/types.ts"
 
 # Reference with line numbers (if supported by the resolver)
-seekcode "fix the bug in @src/cli/index.ts:42-56"
+codegrunt "fix the bug in @src/cli/index.ts:42-56"
 ```
 
 ### URL References
 
 ```bash
 # Reference a URL — its content is fetched and inlined
-seekcode "summarize @https://example.com/docs/api"
+codegrunt "summarize @https://example.com/docs/api"
 ```
 
 ### How It Works
@@ -698,14 +698,14 @@ This is especially useful for providing context without manually copying file co
 
 ## First-Run Setup Wizard
 
-When Seek Code is started for the first time without a configured API key, it runs the setup wizard (`src/cli/setup.ts`).
+When CodeGrunt is started for the first time without a configured API key, it runs the setup wizard (`src/cli/setup.ts`).
 
 ### What It Does
 
-1. **Detects missing configuration** — checks if `DEEPSEEK_API_KEY` is set or `~/.seekcode/config.json` exists
+1. **Detects missing configuration** — checks if `DEEPSEEK_API_KEY` is set or `~/.codegrunt/config.json` exists
 2. **Prompts for API key** — asks the user to enter their DeepSeek API key
 3. **Model selection** — lets user choose from available DeepSeek models
-4. **Saves configuration** — writes to `~/.seekcode/config.json`
+4. **Saves configuration** — writes to `~/.codegrunt/config.json`
 5. **Verifies the key** — makes a test API call to confirm the key works
 
 ### Skipping the Wizard
@@ -714,27 +714,27 @@ You can skip the wizard by pre-configuring:
 
 ```bash
 export DEEPSEEK_API_KEY=sk-xxxxxxxx
-# or create ~/.seekcode/config.json manually
+# or create ~/.codegrunt/config.json manually
 ```
 
 ---
 
 ## Project Guide System
 
-Seek Code automatically loads project-level guidance from `SEEKCODE.md` or `CLAUDE.md` files in the project root, implemented in `src/core/context/project-guide.ts`.
+CodeGrunt automatically loads project-level guidance from `CODEGRUNT.md` or `CLAUDE.md` files in the project root, implemented in `src/core/context/project-guide.ts`.
 
 ### How It Works
 
-1. On startup, Seek Code looks for `SEEKCODE.md` or `CLAUDE.md` in the current working directory
+1. On startup, CodeGrunt looks for `CODEGRUNT.md` or `CLAUDE.md` in the current working directory
 2. If found, the file content is prepended to the system prompt
 3. This allows each project to define custom instructions for the AI assistant
 
-### Example `SEEKCODE.md`
+### Example `CODEGRUNT.md`
 
 ```markdown
-# SEEKCODE.md
+# CODEGRUNT.md
 
-This file provides guidance to Seek Code when working with this project.
+This file provides guidance to CodeGrunt when working with this project.
 
 ## Commands
 npm run test        # run tests
@@ -749,7 +749,7 @@ npm run build       # compile
 
 ### Priority
 
-If both `SEEKCODE.md` and `CLAUDE.md` exist, `SEEKCODE.md` takes precedence.
+If both `CODEGRUNT.md` and `CLAUDE.md` exist, `CODEGRUNT.md` takes precedence.
 
 ---
 
@@ -758,7 +758,7 @@ If both `SEEKCODE.md` and `CLAUDE.md` exist, `SEEKCODE.md` takes precedence.
 ### Configuration Sources (in priority order)
 
 1. **Environment variables** (highest priority)
-2. **`~/.seekcode/config.json`** (user config file)
+2. **`~/.codegrunt/config.json`** (user config file)
 3. **Hardcoded defaults** (lowest priority)
 
 ### Environment Variables
@@ -766,19 +766,19 @@ If both `SEEKCODE.md` and `CLAUDE.md` exist, `SEEKCODE.md` takes precedence.
 | Variable | Description | Default |
 |---|---|---|
 | `DEEPSEEK_API_KEY` | DeepSeek API key | — |
-| `SEEKCODE_MODEL` | Model ID | `deepseek-v4-pro` |
-| `SEEKCODE_PROVIDER` | Provider ID | `deepseek` |
-| `SEEKCODE_MAX_TOKENS` | Max tokens per response | `8192` |
-| `SEEKCODE_TEMPERATURE` | Temperature (0-2) | `0.2` |
-| `SEEKCODE_BASE_URL` | API base URL | `https://api.deepseek.com` |
-| `SEEKCODE_REASONING_EFFORT` | R1 reasoning effort: `low` \| `medium` \| `high` | `medium` |
-| `SEEKCODE_TOP_P` | Nucleus sampling (0-1) | `1` |
-| `SEEKCODE_FREQUENCY_PENALTY` | Repetition penalty (-2 to 2) | `0` |
-| `SEEKCODE_PRESENCE_PENALTY` | Topic diversity penalty (-2 to 2) | `0` |
+| `CODEGRUNT_MODEL` | Model ID | `deepseek-v4-pro` |
+| `CODEGRUNT_PROVIDER` | Provider ID | `deepseek` |
+| `CODEGRUNT_MAX_TOKENS` | Max tokens per response | `8192` |
+| `CODEGRUNT_TEMPERATURE` | Temperature (0-2) | `0.2` |
+| `CODEGRUNT_BASE_URL` | API base URL | `https://api.deepseek.com` |
+| `CODEGRUNT_REASONING_EFFORT` | R1 reasoning effort: `low` \| `medium` \| `high` | `medium` |
+| `CODEGRUNT_TOP_P` | Nucleus sampling (0-1) | `1` |
+| `CODEGRUNT_FREQUENCY_PENALTY` | Repetition penalty (-2 to 2) | `0` |
+| `CODEGRUNT_PRESENCE_PENALTY` | Topic diversity penalty (-2 to 2) | `0` |
 
 ### Config File Location
 
-`~/.seekcode/config.json`
+`~/.codegrunt/config.json`
 
 ```json
 {
@@ -800,31 +800,31 @@ If both `SEEKCODE.md` and `CLAUDE.md` exist, `SEEKCODE.md` takes precedence.
 See `src/config.ts`:
 
 ```typescript
-export async function loadConfig(): Promise<SeekCodeConfig> {
-  const fileConfig = await loadConfigFile();  // reads ~/.seekcode/config.json
+export async function loadConfig(): Promise<CodeGruntConfig> {
+  const fileConfig = await loadConfigFile();  // reads ~/.codegrunt/config.json
 
   return {
-    provider: process.env.SEEKCODE_PROVIDER ?? fileConfig.provider ?? DEFAULTS.provider,
-    model: process.env.SEEKCODE_MODEL ?? fileConfig.model ?? DEFAULTS.model,
-    maxTokens: process.env.SEEKCODE_MAX_TOKENS
-      ? parseInt(process.env.SEEKCODE_MAX_TOKENS, 10)
+    provider: process.env.CODEGRUNT_PROVIDER ?? fileConfig.provider ?? DEFAULTS.provider,
+    model: process.env.CODEGRUNT_MODEL ?? fileConfig.model ?? DEFAULTS.model,
+    maxTokens: process.env.CODEGRUNT_MAX_TOKENS
+      ? parseInt(process.env.CODEGRUNT_MAX_TOKENS, 10)
       : (fileConfig.maxTokens ?? DEFAULTS.maxTokens),
-    temperature: process.env.SEEKCODE_TEMPERATURE
-      ? parseFloat(process.env.SEEKCODE_TEMPERATURE)
+    temperature: process.env.CODEGRUNT_TEMPERATURE
+      ? parseFloat(process.env.CODEGRUNT_TEMPERATURE)
       : (fileConfig.temperature ?? DEFAULTS.temperature),
     apiKey: process.env.DEEPSEEK_API_KEY ?? fileConfig.apiKey ?? '',
-    baseURL: process.env.SEEKCODE_BASE_URL ?? fileConfig.baseURL ?? DEFAULTS.baseURL,
-    reasoningEffort: (process.env.SEEKCODE_REASONING_EFFORT as 'low' | 'medium' | 'high')
+    baseURL: process.env.CODEGRUNT_BASE_URL ?? fileConfig.baseURL ?? DEFAULTS.baseURL,
+    reasoningEffort: (process.env.CODEGRUNT_REASONING_EFFORT as 'low' | 'medium' | 'high')
       ?? fileConfig.reasoningEffort
       ?? DEFAULTS.reasoningEffort,
-    topP: process.env.SEEKCODE_TOP_P
-      ? parseFloat(process.env.SEEKCODE_TOP_P)
+    topP: process.env.CODEGRUNT_TOP_P
+      ? parseFloat(process.env.CODEGRUNT_TOP_P)
       : (fileConfig.topP ?? DEFAULTS.topP),
-    frequencyPenalty: process.env.SEEKCODE_FREQUENCY_PENALTY
-      ? parseFloat(process.env.SEEKCODE_FREQUENCY_PENALTY)
+    frequencyPenalty: process.env.CODEGRUNT_FREQUENCY_PENALTY
+      ? parseFloat(process.env.CODEGRUNT_FREQUENCY_PENALTY)
       : (fileConfig.frequencyPenalty ?? DEFAULTS.frequencyPenalty),
-    presencePenalty: process.env.SEEKCODE_PRESENCE_PENALTY
-      ? parseFloat(process.env.SEEKCODE_PRESENCE_PENALTY)
+    presencePenalty: process.env.CODEGRUNT_PRESENCE_PENALTY
+      ? parseFloat(process.env.CODEGRUNT_PRESENCE_PENALTY)
       : (fileConfig.presencePenalty ?? DEFAULTS.presencePenalty),
   };
 }
@@ -886,7 +886,7 @@ export async function loadConfig(): Promise<SeekCodeConfig> {
 | Symptom | Likely Cause | Solution |
 |---|---|---|
 | `No API key configured` | Missing API key | Set `DEEPSEEK_API_KEY` env var or run setup |
-| `ECONNREFUSED` | Network/proxy issue | Check network, set `SEEKCODE_BASE_URL` |
+| `ECONNREFUSED` | Network/proxy issue | Check network, set `CODEGRUNT_BASE_URL` |
 | `ETIMEDOUT` | Slow API response | Increase timeout or check API status |
 | Tool execution hangs | Shell command stuck | Check for interactive prompts in commands |
 
@@ -917,4 +917,4 @@ Quick checklist:
 
 ## License
 
-MIT © Seek Code Contributors
+MIT © CodeGrunt Contributors

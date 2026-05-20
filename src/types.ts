@@ -91,7 +91,7 @@ export interface LLMProvider {
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
-export interface SeekCodeConfig {
+export interface CodeGruntConfig {
   provider: string;
   model: string;
   maxTokens: number;
@@ -113,7 +113,7 @@ export interface SeekCodeConfig {
 export interface AgentRunOptions {
   task: string;
   cwd: string;
-  config: SeekCodeConfig;
+  config: CodeGruntConfig;
   provider: LLMProvider;
   context?: import('./core/context/manager.js').ContextManager;
   /** When provided, replaces the default coding-assistant system prompt.

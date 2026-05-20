@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
-import type { SeekCodeConfig } from '../../types.js';
+import type { CodeGruntConfig } from '../../types.js';
 
-export function createOpenAIClient(config: SeekCodeConfig): OpenAI {
+export function createOpenAIClient(config: CodeGruntConfig): OpenAI {
   return new OpenAI({
     apiKey: config.apiKey,
     baseURL: config.baseURL,

@@ -1,7 +1,7 @@
 import { readdir, readFile, writeFile, mkdir, stat } from 'fs/promises';
 import { join, resolve, relative } from 'path';
 import chalk from 'chalk';
-import type { LLMProvider, Message, SeekCodeConfig } from '../types.js';
+import type { LLMProvider, Message, CodeGruntConfig } from '../types.js';
 import type { ContextManager } from '../core/context/manager.js';
 import { DEEPSEEK_MODELS } from './setup.js';
 import { getSessionUsage } from '../core/agent/loop.js';
@@ -13,8 +13,8 @@ import { validateApiKey } from '../providers/deepseek/client.js';
 export type SlashCommandResult =
   | { type: 'handled' }
   | { type: 'clear' }
-  | { type: 'config_changed'; config: SeekCodeConfig }
-  | { type: 'model_changed'; config: SeekCodeConfig }
+  | { type: 'config_changed'; config: CodeGruntConfig }
+  | { type: 'model_changed'; config: CodeGruntConfig }
   | { type: 'exit' }
   | { type: 'skill_run'; prompt: string; system?: string }
   | { type: 'skills_reload' }
@@ -23,7 +23,7 @@ export type SlashCommandResult =
 export async function handleSlashCommand(
   input: string,
   cwd: string,
-  config: SeekCodeConfig,
+  config: CodeGruntConfig,
   provider: LLMProvider,
   context: ContextManager,
   skills: Skill[] = [],
@@ -98,7 +98,7 @@ export async function handleSlashCommand(
 
 // ── /help ───────────────────────────────────────────────────────────────────
 
-function printHelp(config: SeekCodeConfig, skills: Skill[] = []): void {
+function printHelp(config: CodeGruntConfig, skills: Skill[] = []): void {
   const skillsSection = skills.length > 0
     ? `\n${chalk.bold('Skills')}\n\n` +
       skills.map((s) =>
@@ -108,7 +108,7 @@ function printHelp(config: SeekCodeConfig, skills: Skill[] = []): void {
   console.log(`
 ${chalk.bold('Slash Commands')}
 
-  ${chalk.cyan('/init')}              Analyze the codebase and generate a SEEKCODE.md project guide
+  ${chalk.cyan('/init')}              Analyze the codebase and generate a CODEGRUNT.md project guide
   ${chalk.cyan('/model')}             Switch model interactively
   ${chalk.cyan('/model <id>')}        Switch to a specific model  (e.g. /model deepseek-v4-pro)
   ${chalk.cyan('/config')}            Show current configuration
@@ -124,7 +124,7 @@ ${chalk.bold('Slash Commands')}
   ${chalk.cyan('/help')}              Show this help message
   ${chalk.cyan('/clear')}             Clear conversation context
   ${chalk.cyan('/compact')}           Summarize and compress conversation history to save tokens
-  ${chalk.cyan('/exit')}              Exit Seek Code
+  ${chalk.cyan('/exit')}              Exit CodeGrunt
 ${skillsSection}
 ${chalk.bold('@ References')}
 
@@ -138,7 +138,7 @@ ${chalk.bold('Current')}
 
 ${chalk.bold('Other')}
 
-  ${chalk.cyan('exit')} / ${chalk.cyan('quit')}   Exit Seek Code
+  ${chalk.cyan('exit')} / ${chalk.cyan('quit')}   Exit CodeGrunt
   ${chalk.cyan('Ctrl+C')}         Interrupt a running task
 `);
 }
@@ -169,7 +169,7 @@ ${chalk.gray('─'.repeat(30))}
 
 async function switchReasoningEffort(
   arg: string,
-  config: SeekCodeConfig,
+  config: CodeGruntConfig,
 ): Promise<SlashCommandResult> {
   const validEfforts = ['low', 'medium', 'high'] as const;
 
@@ -208,7 +208,7 @@ async function switchReasoningEffort(
 
 async function switchToken(
   arg: string,
-  config: SeekCodeConfig,
+  config: CodeGruntConfig,
 ): Promise<SlashCommandResult> {
   // If an argument is provided, use it directly
   if (arg) {
@@ -278,7 +278,7 @@ async function switchToken(
 
 async function handleConfig(
   rest: string[],
-  config: SeekCodeConfig,
+  config: CodeGruntConfig,
 ): Promise<SlashCommandResult> {
   const sub = rest[0]?.toLowerCase();
   const val = rest.slice(1).join(' ').trim();
@@ -322,7 +322,7 @@ async function handleConfig(
   }
 }
 
-function printConfigOverview(config: SeekCodeConfig): void {
+function printConfigOverview(config: CodeGruntConfig): void {
   console.log(`
 ${chalk.bold('Current Configuration')}
 
@@ -341,7 +341,7 @@ ${chalk.gray('Use /config <key> <value> to change a setting, e.g. /config temper
 
 async function switchTemperature(
   arg: string,
-  config: SeekCodeConfig,
+  config: CodeGruntConfig,
 ): Promise<SlashCommandResult> {
   if (arg) {
     const val = parseFloat(arg);
@@ -382,7 +382,7 @@ async function switchTemperature(
 
 async function switchMaxTokens(
   arg: string,
-  config: SeekCodeConfig,
+  config: CodeGruntConfig,
 ): Promise<SlashCommandResult> {
   if (arg) {
     const val = parseInt(arg, 10);
@@ -422,7 +422,7 @@ async function switchMaxTokens(
 
 async function switchTopP(
   arg: string,
-  config: SeekCodeConfig,
+  config: CodeGruntConfig,
 ): Promise<SlashCommandResult> {
   if (arg) {
     const val = parseFloat(arg);
@@ -461,7 +461,7 @@ async function switchTopP(
 
 async function switchFrequencyPenalty(
   arg: string,
-  config: SeekCodeConfig,
+  config: CodeGruntConfig,
 ): Promise<SlashCommandResult> {
   if (arg) {
     const val = parseFloat(arg);
@@ -501,7 +501,7 @@ async function switchFrequencyPenalty(
 
 async function switchPresencePenalty(
   arg: string,
-  config: SeekCodeConfig,
+  config: CodeGruntConfig,
 ): Promise<SlashCommandResult> {
   if (arg) {
     const val = parseFloat(arg);
@@ -537,7 +537,7 @@ async function switchPresencePenalty(
   return { type: 'config_changed', config: { ...config, presencePenalty: val } };
 }
 
-async function switchModel(arg: string, config: SeekCodeConfig): Promise<SlashCommandResult> {
+async function switchModel(arg: string, config: CodeGruntConfig): Promise<SlashCommandResult> {
   // /model deepseek-v4-pro  — direct switch by ID
   if (arg) {
     const match = DEEPSEEK_MODELS.find((m) => m.id === arg || m.label.toLowerCase() === arg.toLowerCase());
@@ -575,7 +575,7 @@ async function switchModel(arg: string, config: SeekCodeConfig): Promise<SlashCo
 
 async function compactContext(
   context: ContextManager,
-  config: SeekCodeConfig,
+  config: CodeGruntConfig,
   provider: LLMProvider,
 ): Promise<void> {
   const messages = context.getMessages();
@@ -648,16 +648,16 @@ const INIT_KEY_FILES = [
   'Makefile', 'Dockerfile', 'docker-compose.yml',
   'pyproject.toml', 'setup.py', 'requirements.txt',
   'Cargo.toml', 'go.mod',
-  'README.md', 'CLAUDE.md', 'SEEKCODE.md',
+  'README.md', 'CLAUDE.md', 'CODEGRUNT.md',
 ];
 
 async function runInit(
   cwd: string,
-  config: SeekCodeConfig,
+  config: CodeGruntConfig,
   provider: LLMProvider,
   outputFile: string,
 ): Promise<void> {
-  const outPath = resolve(cwd, outputFile || 'SEEKCODE.md');
+  const outPath = resolve(cwd, outputFile || 'CODEGRUNT.md');
   console.log(chalk.gray(`Analyzing codebase at ${cwd}…\n`));
 
   // 1. Collect file tree
@@ -822,7 +822,7 @@ Rules:
 
 // ── /skills ─────────────────────────────────────────────────────────────────
 // /skills              — list all loaded skills
-// /skills create <name> — interactively create a new skill in ~/.seekcode/skills/
+// /skills create <name> — interactively create a new skill in ~/.codegrunt/skills/
 
 async function handleSkills(
   rest: string[],
@@ -889,7 +889,7 @@ async function handleSkills(
     console.log(`\n${chalk.gray('No skills loaded.')}`);
     console.log(chalk.gray(`Create one with ${chalk.cyan('/skills create <name>')}`));
     console.log(chalk.gray(`Or add .md files to ${chalk.gray(getGlobalSkillsDir())}`));
-    console.log(chalk.gray(`Project skills: ${chalk.gray('.seekcode/skills/')}`));
+    console.log(chalk.gray(`Project skills: ${chalk.gray('.codegrunt/skills/')}`));
     return { type: 'handled' };
   }
 
@@ -906,7 +906,7 @@ async function handleSkills(
   console.log(`\n${chalk.gray('Use /<skill-name> to run a skill')}`);
   console.log(chalk.gray(`Create: ${chalk.cyan('/skills create <name>')}`));
   console.log(chalk.gray(`Global dir: ${chalk.gray(getGlobalSkillsDir())}`));
-  console.log(chalk.gray(`Project dir: ${chalk.gray('.seekcode/skills/')}`));
+  console.log(chalk.gray(`Project dir: ${chalk.gray('.codegrunt/skills/')}`));
 
   return { type: 'handled' };
 }
@@ -915,7 +915,7 @@ async function handleSkills(
 
 async function reviewContext(
   context: ContextManager,
-  config: SeekCodeConfig,
+  config: CodeGruntConfig,
   provider: LLMProvider,
 ): Promise<void> {
   const messages = context.getMessages();

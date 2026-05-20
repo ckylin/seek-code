@@ -1,12 +1,12 @@
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
-import type { SeekCodeConfig } from './types.js';
+import type { CodeGruntConfig } from './types.js';
 
-const CONFIG_DIR = join(homedir(), '.seekcode');
+const CONFIG_DIR = join(homedir(), '.codegrunt');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 
-const DEFAULTS: SeekCodeConfig = {
+const DEFAULTS: CodeGruntConfig = {
   provider: 'deepseek',
   model: 'deepseek-v4-pro',
   maxTokens: 8192,
@@ -16,10 +16,10 @@ const DEFAULTS: SeekCodeConfig = {
   reasoningEffort: 'medium',
 };
 
-async function loadConfigFile(): Promise<Partial<SeekCodeConfig>> {
+async function loadConfigFile(): Promise<Partial<CodeGruntConfig>> {
   try {
     const raw = await readFile(CONFIG_PATH, 'utf-8');
-    return JSON.parse(raw) as Partial<SeekCodeConfig>;
+    return JSON.parse(raw) as Partial<CodeGruntConfig>;
   } catch {
     return {};
   }
@@ -43,26 +43,26 @@ function envFloat(name: string, fallback: number | undefined): number | undefine
   return isNaN(n) ? fallback : n;
 }
 
-export async function loadConfig(): Promise<SeekCodeConfig> {
+export async function loadConfig(): Promise<CodeGruntConfig> {
   const fileConfig = await loadConfigFile();
 
   return {
-    provider: process.env.SEEKCODE_PROVIDER ?? fileConfig.provider ?? DEFAULTS.provider,
-    model: process.env.SEEKCODE_MODEL ?? fileConfig.model ?? DEFAULTS.model,
-    maxTokens: envInt('SEEKCODE_MAX_TOKENS', fileConfig.maxTokens ?? DEFAULTS.maxTokens),
-    temperature: envFloat('SEEKCODE_TEMPERATURE', fileConfig.temperature ?? DEFAULTS.temperature),
+    provider: process.env.CODEGRUNT_PROVIDER ?? fileConfig.provider ?? DEFAULTS.provider,
+    model: process.env.CODEGRUNT_MODEL ?? fileConfig.model ?? DEFAULTS.model,
+    maxTokens: envInt('CODEGRUNT_MAX_TOKENS', fileConfig.maxTokens ?? DEFAULTS.maxTokens),
+    temperature: envFloat('CODEGRUNT_TEMPERATURE', fileConfig.temperature ?? DEFAULTS.temperature),
     apiKey: process.env.DEEPSEEK_API_KEY ?? fileConfig.apiKey ?? '',
-    baseURL: process.env.SEEKCODE_BASE_URL ?? fileConfig.baseURL ?? DEFAULTS.baseURL,
-    reasoningEffort: (process.env.SEEKCODE_REASONING_EFFORT as 'low' | 'medium' | 'high')
+    baseURL: process.env.CODEGRUNT_BASE_URL ?? fileConfig.baseURL ?? DEFAULTS.baseURL,
+    reasoningEffort: (process.env.CODEGRUNT_REASONING_EFFORT as 'low' | 'medium' | 'high')
       ?? fileConfig.reasoningEffort
       ?? DEFAULTS.reasoningEffort,
-    topP: envFloat('SEEKCODE_TOP_P', fileConfig.topP ?? DEFAULTS.topP),
-    frequencyPenalty: envFloat('SEEKCODE_FREQUENCY_PENALTY', fileConfig.frequencyPenalty ?? DEFAULTS.frequencyPenalty),
-    presencePenalty: envFloat('SEEKCODE_PRESENCE_PENALTY', fileConfig.presencePenalty ?? DEFAULTS.presencePenalty),
+    topP: envFloat('CODEGRUNT_TOP_P', fileConfig.topP ?? DEFAULTS.topP),
+    frequencyPenalty: envFloat('CODEGRUNT_FREQUENCY_PENALTY', fileConfig.frequencyPenalty ?? DEFAULTS.frequencyPenalty),
+    presencePenalty: envFloat('CODEGRUNT_PRESENCE_PENALTY', fileConfig.presencePenalty ?? DEFAULTS.presencePenalty),
   };
 }
 
-export async function saveConfig(config: SeekCodeConfig): Promise<void> {
+export async function saveConfig(config: CodeGruntConfig): Promise<void> {
   await mkdir(CONFIG_DIR, { recursive: true });
   await writeFile(
     CONFIG_PATH,

@@ -1,24 +1,24 @@
-# Seek Code
+# CodeGrunt
 
 <p align="center">
-  <img src="./assets/logo.png" alt="Seek Code Logo" width="50%" />
+  <img src="./assets/logo.png" alt="CodeGrunt Logo" width="50%" />
 </p>
 
 > 终端原生的 AI 命令行编程助手 — 基于 DeepSeek 构建。
 
-[![npm version](https://img.shields.io/npm/v/seekcode.svg)](https://www.npmjs.com/package/seekcode)
+[![npm version](https://img.shields.io/npm/v/codegrunt.svg)](https://www.npmjs.com/package/codegrunt)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
 
-Seek Code 是一个开源的终端原生 AI 编程助手。它能读懂你的代码库、理解上下文，帮助你在命令行中编写、重构、调试和交付代码。
+CodeGrunt 是一个开源的终端原生 AI 编程助手。它能读懂你的代码库、理解上下文，帮助你在命令行中编写、重构、调试和交付代码。
 
 ```bash
 # 交互式 REPL
-seekcode
+codegrunt
 
 # 单次任务
-seekcode "把 auth 模块重构为 async/await"
+codegrunt "把 auth 模块重构为 async/await"
 ```
 
 ---
@@ -26,7 +26,7 @@ seekcode "把 auth 模块重构为 async/await"
 ## 特性
 
 - **🤖 智能代理** — 使用 ReAct（推理 + 行动）循环，自主执行多步骤任务：读取文件、编辑代码、运行 Shell、搜索代码库
-- **📂 理解代码库** — 通过 `@` 文件引用和项目指南文件（`SEEKCODE.md` / `CLAUDE.md`）理解你的项目结构、模块导入和编码约定
+- **📂 理解代码库** — 通过 `@` 文件引用和项目指南文件（`CODEGRUNT.md` / `CLAUDE.md`）理解你的项目结构、模块导入和编码约定
 - **🔌 DeepSeek 驱动** — 内置支持 DeepSeek Chat、V4 Flash、V4 Pro 和 R1 推理模型
 - **🛠️ 工具调用** — 6 个内置工具：文件读写/编辑、Shell 执行、目录列表、代码搜索，破坏性操作会显示 diff 预览并请求用户确认
 - **⚡ 流式输出** — 实时 Token 流式传输，支持 Markdown 渲染和推理过程可见，终端体验流畅
@@ -42,19 +42,19 @@ seekcode "把 auth 模块重构为 async/await"
 
 ```bash
 # 全局安装
-npm install -g seekcode
+npm install -g codegrunt
 
 # 设置 API 密钥
 export DEEPSEEK_API_KEY=your_key_here
 
 # 启动交互式会话
-seekcode
+codegrunt
 
 # 单次任务
-seekcode "解释这个项目的架构"
+codegrunt "解释这个项目的架构"
 ```
 
-首次运行且未配置 API 密钥时，Seek Code 会启动交互式设置向导引导你完成配置。
+首次运行且未配置 API 密钥时，CodeGrunt 会启动交互式设置向导引导你完成配置。
 
 ---
 
@@ -65,20 +65,20 @@ seekcode "解释这个项目的架构"
 ### npm（推荐）
 
 ```bash
-npm install -g seekcode
+npm install -g codegrunt
 ```
 
 ### pnpm
 
 ```bash
-pnpm add -g seekcode
+pnpm add -g codegrunt
 ```
 
 ### 从源码构建
 
 ```bash
-git clone https://github.com/your-org/seekcode.git
-cd seekcode
+git clone https://github.com/your-org/codegrunt.git
+cd codegrunt
 npm install
 npm run build
 npm link
@@ -91,7 +91,7 @@ npm link
 ### 交互式 REPL
 
 ```bash
-seekcode
+codegrunt
 ```
 
 启动交互式会话，提供：
@@ -105,7 +105,7 @@ seekcode
 ### 单次任务模式
 
 ```bash
-seekcode "你的任务描述"
+codegrunt "你的任务描述"
 ```
 
 执行单个任务后退出。适用于脚本编写和快速查询。
@@ -117,7 +117,7 @@ seekcode "你的任务描述"
 | `/help` | 显示帮助信息和所有可用命令 |
 | `/model` | 交互式切换模型（方向键选择器） |
 | `/model <id>` | 切换到指定模型（例如 `/model deepseek-v4-pro`） |
-| `/init` | 分析代码库并生成 `SEEKCODE.md` 项目指南 |
+| `/init` | 分析代码库并生成 `CODEGRUNT.md` 项目指南 |
 | `/clear` | 清除对话上下文 |
 | `/compact` | 总结并压缩对话历史以节省 Token |
 | `/review` | 审查本次会话的变更是否有逻辑问题 |
@@ -127,7 +127,7 @@ seekcode "你的任务描述"
 | `/reasoning` / `/effort` | 设置 R1 模型的推理强度（low/medium/high） |
 | `/token` | 更新 DeepSeek API 密钥 |
 | `/skills` | 列出和管理技能（创建、列表） |
-| `/exit` | 退出 Seek Code |
+| `/exit` | 退出 CodeGrunt |
 
 ### @-引用
 
@@ -145,24 +145,24 @@ seekcode "你的任务描述"
 
 ## 配置
 
-Seek Code 通过环境变量或 `~/.seekcode/config.json` 文件配置。
+CodeGrunt 通过环境变量或 `~/.codegrunt/config.json` 文件配置。
 
 ### 环境变量
 
 | 变量 | 描述 | 默认值 |
 |---|---|---|
 | `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | — |
-| `SEEKCODE_MODEL` | 使用的模型 ID | `deepseek-v4-pro` |
-| `SEEKCODE_PROVIDER` | LLM 提供商 | `deepseek` |
-| `SEEKCODE_MAX_TOKENS` | 每次响应的最大 Token 数 | `8192` |
-| `SEEKCODE_TEMPERATURE` | 响应温度 (0-2) | `0.2` |
-| `SEEKCODE_BASE_URL` | 自定义 API 基础 URL | `https://api.deepseek.com` |
-| `SEEKCODE_REASONING_EFFORT` | R1 推理强度：`low` \| `medium` \| `high` | `medium` |
-| `SEEKCODE_TOP_P` | 核采样 (0-1) | `1` |
-| `SEEKCODE_FREQUENCY_PENALTY` | 重复惩罚 (-2 到 2) | `0` |
-| `SEEKCODE_PRESENCE_PENALTY` | 主题多样性惩罚 (-2 到 2) | `0` |
+| `CODEGRUNT_MODEL` | 使用的模型 ID | `deepseek-v4-pro` |
+| `CODEGRUNT_PROVIDER` | LLM 提供商 | `deepseek` |
+| `CODEGRUNT_MAX_TOKENS` | 每次响应的最大 Token 数 | `8192` |
+| `CODEGRUNT_TEMPERATURE` | 响应温度 (0-2) | `0.2` |
+| `CODEGRUNT_BASE_URL` | 自定义 API 基础 URL | `https://api.deepseek.com` |
+| `CODEGRUNT_REASONING_EFFORT` | R1 推理强度：`low` \| `medium` \| `high` | `medium` |
+| `CODEGRUNT_TOP_P` | 核采样 (0-1) | `1` |
+| `CODEGRUNT_FREQUENCY_PENALTY` | 重复惩罚 (-2 到 2) | `0` |
+| `CODEGRUNT_PRESENCE_PENALTY` | 主题多样性惩罚 (-2 到 2) | `0` |
 
-### 配置文件 (`~/.seekcode/config.json`)
+### 配置文件 (`~/.codegrunt/config.json`)
 
 ```json
 {
@@ -192,7 +192,7 @@ Seek Code 通过环境变量或 `~/.seekcode/config.json` 文件配置。
 ## 架构
 
 ```
-seekcode/
+codegrunt/
 ├── src/
 │   ├── cli/                      # CLI 入口、REPL、参数解析
 │   │   ├── index.ts              # 入口（commander 驱动）
@@ -218,7 +218,7 @@ seekcode/
 │   │   │   └── search_files.ts   # 在文件中搜索文本
 │   │   └── context/
 │   │       ├── manager.ts        # 上下文窗口管理（Token 预算、裁剪）
-│   │       └── project-guide.ts  # 加载 SEEKCODE.md / CLAUDE.md 项目指南
+│   │       └── project-guide.ts  # 加载 CODEGRUNT.md / CLAUDE.md 项目指南
 │   ├── providers/
 │   │   └── deepseek/
 │   │       ├── provider.ts       # DeepSeek LLM 提供商实现
@@ -243,7 +243,7 @@ seekcode/
 ├── package.json
 ├── tsconfig.json
 ├── vitest.config.ts
-├── SEEKCODE.md                   # Seek Code 项目指南
+├── CODEGRUNT.md                   # CodeGrunt 项目指南
 ├── CLAUDE.md                     # AI 编码助手项目指南
 └── README.md                     # 本文件
 ```
@@ -267,7 +267,7 @@ seekcode/
 
 ### 代理循环 (`src/core/agent/loop.ts`)
 
-代理循环是 Seek Code 的核心，遵循 ReAct（推理 + 行动）模式：
+代理循环是 CodeGrunt 的核心，遵循 ReAct（推理 + 行动）模式：
 
 1. **系统提示**在每次会话中构建一次（保持稳定以最大化提示缓存命中率）
 2. **用户消息**附加 `[cwd]` 和 `[date]` 前缀以提供上下文
