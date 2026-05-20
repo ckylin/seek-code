@@ -5,3 +5,4 @@ dist/
 issue/
 docs/VERSION.md
 .claude/
+.vscode/
