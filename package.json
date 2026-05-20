@@ -1,10 +1,10 @@
 {
-  "name": "seekcode",
+  "name": "seek-code",
   "version": "0.1.0",
   "description": "An AI-powered CLI coding assistant for the terminal — built on DeepSeek",
   "type": "module",
   "bin": {
-    "seekcode": "./dist/cli/index.js"
+    "seek-code": "dist/cli/index.js"
   },
   "scripts": {
     "dev": "tsx watch src/cli/index.ts",
