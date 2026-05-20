@@ -214,103 +214,288 @@ npm run typecheck
 
 ### 调试
 
-#### 源码映射调试
+CodeGrunt 提供了多种调试方式，从快速日志打印到完整的 IDE 断点调试。以下按推荐顺序排列。
 
-已启用源码映射（tsconfig.json 中的 sourceMap: true），因此你可以在 Node.js 中调试编译后的输出：
+---
 
-```bash
-node --inspect dist/cli/index.js
+#### 方法 1：VS Code 内置断点调试（强烈推荐）
+
+项目已包含预置的 `.vscode/launch.json`，开箱即用。按 `Ctrl+Shift+D` 打开调试面板，顶部下拉选择配置，按 `F5` 启动。
+
+**5 种调试配置：**
+
+| 配置名称 | 作用 | 适用场景 |
+|---|---|---|
+| 🚀 启动 REPL（交互模式） | 以调试模式启动交互式 CLI | 调试命令处理、REPL 界面、输入补全 |
+| 🔧 单次任务调试 | 执行一个任务后退出的 Debug | 调试完整 Agent 循环、工具调用链路 |
+| 🧪 调试当前测试文件 | 运行并调试当前打开的测试文件 | 调试某个工具的单元测试 |
+| 🧪 调试全部测试 | 运行全部测试并调试 | 检查整体测试质量 |
+| 🌐 Chrome DevTools 远程调试 | 带 `--inspect` 参数启动，在 Chrome 中调试 | 偏好浏览器开发者工具时使用 |
+
+**配置文件内容（`.vscode/launch.json`）：**
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "🚀 启动 REPL（交互模式）",
+      "type": "node",
+      "request": "launch",
+      "runtimeArgs": ["--import", "tsx"],
+      "args": ["src/cli/index.ts"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "🔧 单次任务调试",
+      "type": "node",
+      "request": "launch",
+      "runtimeArgs": ["--import", "tsx"],
+      "args": ["src/cli/index.ts", "列出当前目录的文件"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "🧪 调试当前测试文件",
+      "type": "node",
+      "request": "launch",
+      "runtimeArgs": [
+        "--import", "tsx",
+        "${workspaceFolder}/node_modules/vitest/vitest.mjs"
+      ],
+      "args": ["run", "${relativeFile}"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "🧪 调试全部测试",
+      "type": "node",
+      "request": "launch",
+      "runtimeArgs": [
+        "--import", "tsx",
+        "${workspaceFolder}/node_modules/vitest/vitest.mjs"
+      ],
+      "args": ["run"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "🌐 Chrome DevTools 远程调试",
+      "type": "node",
+      "request": "launch",
+      "runtimeArgs": ["--inspect", "--import", "tsx"],
+      "args": ["src/cli/index.ts"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}
 ```
 
-或直接使用 tsx 调试（推荐，无需先构建）：
+**额外 VS Code 设置（`.vscode/settings.json`）：**
+
+```json
+{
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true
+}
+```
+
+这确保 VS Code 使用项目中安装的 TypeScript 版本，避免类型检查不一致。
+
+---
+
+#### 方法 2：Chrome DevTools 远程调试
+
+如果你更喜欢 Chrome 浏览器开发者工具，可以通过以下方式启动：
 
 ```bash
+# 从终端启动带 --inspect 参数
 node --inspect --import tsx src/cli/index.ts
 ```
 
-然后在 Chrome 浏览器中打开 `chrome://inspect`，点击 "Open dedicated DevTools for Node" 即可开始调试。
+然后在 Chrome 地址栏输入 `chrome://inspect`，点击 **"Open dedicated DevTools for Node"**。一个独立的 DevTools 窗口会打开，你可以在其中：
 
-#### 使用 console.error 输出调试信息
+- 在 Sources 面板中对 TypeScript 源码设置断点
+- 使用 Console 面板执行表达式
+- 查看调用堆栈、变量和作用域
 
-由于 CodeGrunt 的工具输出通过 stdout 传递，请使用 `console.error()` 输出调试信息——它会输出到 stderr，不会干扰工具输出解析：
+> **注意**：`tsconfig.json` 中已启用 `"sourceMap": true`，因此 Source Map 会自动将编译后的 JS 映射回 TypeScript 源码。
 
-```typescript
-// ✅ 正确：使用 console.error 调试
-console.error('[调试] 工具参数:', params);
+---
 
-// ❌ 错误：使用 console.log 会污染工具输出
-console.log('[调试] 工具参数:', params);
-```
+#### 方法 3：console.error 日志调试（最快速）
 
-#### 调试代理循环（Agent Loop）
-
-代理循环（`src/core/agent/loop.ts`）是 CodeGrunt 的核心。调试代理循环时，可以关注以下关键点：
-
-1. **系统提示构建**：检查系统提示是否正确包含项目指南（CODEGRUNT.md/CLAUDE.md）内容
-2. **消息历史**：在 `ContextManager` 中打印当前消息列表，确认上下文裁剪是否正常
-3. **工具调用解析**：检查 LLM 返回的 tool_call 参数是否被正确解析
-4. **流式输出**：确认 text_delta、reasoning_delta、tool_call_delta 等流式块是否正确处理
-
-在 `loop.ts` 中添加临时调试输出：
+由于 CodeGrunt 的工具输出通过 **stdout** 传递，**严禁使用 `console.log()`**——它会污染工具输出，破坏解析逻辑。
 
 ```typescript
-// 在关键位置插入调试日志
-console.error('[Agent Loop] 迭代次数:', iteration);
-console.error('[Agent Loop] 消息数量:', messages.length);
-console.error('[Agent Loop] 工具调用:', toolCalls);
+// ✅ 正确：输出到 stderr，不影响工具输出
+console.error('[DEBUG] 参数:', params);
+console.error('[DEBUG] 当前状态:', JSON.stringify(state, null, 2));
+
+// ❌ 错误：输出到 stdout，破坏工具输出
+console.log('[DEBUG] 参数:', params);
 ```
 
-#### 调试工具执行
+---
 
-工具执行器（`src/core/tools/executor.ts`）负责执行 LLM 调用的工具。调试工具执行时：
+#### 方法 4：开发热重载模式
 
-1. **检查工具注册**：确认工具已在 `registry.ts` 中正确注册
-2. **验证参数解析**：检查 LLM 传入的参数是否与工具定义的参数模式匹配
-3. **查看执行结果**：检查工具返回的 `ToolResult` 结构是否正确
+不需要完整断点调试时，watch 模式是最快的方式：
+
+```bash
+npm run dev
+```
+
+每次保存 `src/` 下的文件，程序自动重启。配合 `console.error` 日志可以快速迭代。
+
+---
+
+#### 各模块断点位置速查表
+
+根据你想调试的部分，在对应文件的对应位置打断点：
+
+| 调试目标 | 关键文件 | 推荐断点位置 |
+|---|---|---|
+| **REPL 启动流程** | `src/cli/repl.ts` | `startRepl()` 函数入口（约第 15 行） |
+| **用户输入处理** | `src/cli/input.ts` | `question()` 函数（约第 80 行） |
+| **多行输入解析** | `src/cli/input.ts` | `isInputTuple()` 返回处 |
+| **@引用解析** | `src/cli/at-resolver.ts` | `resolveAtReferences()` 函数入口 |
+| **斜杠命令分发** | `src/cli/commands.ts` | `handleSlashCommand()` 的 switch 语句 |
+| **Agent 循环——消息构建** | `src/core/agent/loop.ts` | `runAgentLoop()` 中 `messages.push()` 处 |
+| **Agent 循环——LLM 调用** | `src/core/agent/loop.ts` | `provider.stream()` 调用处 |
+| **Agent 循环——工具调用解析** | `src/core/agent/loop.ts` | `toolCalls` 变量赋值后 |
+| **Agent 循环——结果返回** | `src/core/agent/loop.ts` | `finalResponse` 赋值处 |
+| **工具注册** | `src/core/tools/registry.ts` | `getTool()` 调用处 |
+| **工具执行——参数验证** | `src/core/tools/executor.ts` | `executeToolCall()` 函数入口 |
+| **工具执行——确认弹窗** | `src/core/tools/executor.ts` | `confirm()` 调用处 |
+| **工具执行——结果构造** | `src/core/tools/executor.ts` | `return` 语句处 |
+| **read_file 工具** | `src/core/tools/read_file.ts` | `execute()` 函数入口 |
+| **write_file 工具** | `src/core/tools/write_file.ts` | `execute()` 函数入口，`writeFile()` 调用前 |
+| **edit_file 工具** | `src/core/tools/edit_file.ts` | 字符串匹配替换逻辑处 |
+| **execute_shell 工具** | `src/core/tools/execute_shell.ts` | `exec()` 调用前后 |
+| **LLM 请求发送** | `src/providers/deepseek/provider.ts` | `stream()` 方法入口 |
+| **LLM 流式响应处理** | `src/providers/deepseek/provider.ts` | `for await` 循环内 |
+| **Token 使用统计** | `src/providers/deepseek/provider.ts` | `usage` 对象构建处 |
+| **上下文裁剪** | `src/core/context/manager.ts` | `trim()` 方法 |
+| **项目指南加载** | `src/core/context/project-guide.ts` | `loadProjectGuide()` 函数 |
+| **配置加载** | `src/config.ts` | `loadConfig()` 函数 |
+| **费用/余额查询** | `src/utils/billing.ts` | `fetchBalance()` 函数 |
+| **Diff 预览** | `src/utils/confirm.ts` | `confirm()` 函数 |
+
+---
+
+#### 实战演练：5 种调试场景完整流程
+
+##### 场景 A：调试 REPL 启动和界面交互
+
+1. 在 VS Code 中打开项目
+2. 按 `Ctrl+Shift+D` 切换到调试面板
+3. 顶部下拉选择 **"🚀 启动 REPL（交互模式）"**
+4. 在 `src/cli/commands.ts` 的 `handleSlashCommand()` 函数入口处按 `F9` 设置断点
+5. 按 `F5` 启动调试
+6. 程序启动，REPL 在集成终端中显示提示符
+7. 在终端中输入 `/help` 并回车
+8. 断点触发，可以：
+   - 按 `F10` 单步跳过（Step Over）
+   - 按 `F11` 单步进入（Step Into）
+   - 鼠标悬停变量查看值
+   - 在左侧变量面板查看完整作用域
+9. 继续执行（`F5`），观察 `/help` 输出
+
+##### 场景 B：调试一次完整的对话流程
+
+1. 选择 **"🔧 单次任务调试"**
+2. 在 `src/core/agent/loop.ts` 的 `runAgentLoop()` 以下位置设断点：
+   - 函数入口（观察参数）
+   - `messages.push(userMessage)` 之后（观察消息构建）
+   - `provider.stream()` 调用处（观察 LLM 请求）
+   - `toolCalls` 解析后（观察工具调用）
+   - `finalResponse` 赋值处（观察最终结果）
+3. 按 `F5` 启动
+4. 在每个断点处检查：
+   - 消息列表是否正确（system + user）
+   - LLM 请求参数是否完整
+   - 工具调用参数是否匹配定义
+   - 最终响应是否符合预期
+5. 注意：任务执行需要 API 密钥且会产生费用
+
+##### 场景 C：调试特定工具（不产生 API 费用）
+
+1. 打开要调试的测试文件，如 `tests/tools/read_file.test.ts`
+2. 选择 **"🧪 调试当前测试文件"**
+3. 在对应工具源码（如 `src/core/tools/read_file.ts`）的 `execute()` 入口打断点
+4. 按 `F5`，断点触发后可单步跟踪完整工具逻辑
+5. 这是最推荐的调试方式：**零 API 费用 + 快速验证**
+
+##### 场景 D：调试上下文裁剪逻辑
+
+1. 选择 **"🔧 单次任务调试"**
+2. 在 `src/core/context/manager.ts` 的 `trim()` 方法打断点
+3. 在 `addMessage()` 方法也打断点
+4. 启动后观察每次添加消息时的 Token 估算值和裁剪行为
+5. 用调试控制台执行 `messages.map(m => m.role)` 查看消息角色分布
+
+##### 场景 E：使用 Chrome DevTools 调试
+
+1. 选择 **"🌐 Chrome DevTools 远程调试"**
+2. 按 `F5` 启动
+3. 打开 Chrome，地址栏输入 `chrome://inspect`
+4. 点击 "Open dedicated DevTools for Node"
+5. 在 Sources 面板 → Filesystem → 添加项目文件夹
+6. 导航到 `src/` 下的 TypeScript 文件，点击行号设置断点
+7. 在 REPL 中输入命令触发断点
+
+---
+
+#### console.error 调试日志模板
+
+将以下代码粘贴到需要调试的函数中：
 
 ```typescript
-// 在 executor.ts 中添加调试日志
-console.error('[Executor] 执行工具:', toolName);
-console.error('[Executor] 参数:', JSON.stringify(args));
-console.error('[Executor] 结果:', JSON.stringify(result));
+// === 通用调试模板 ===
+console.error('========================================');
+console.error('[DEBUG] 函数名:', 'functionName');
+console.error('[DEBUG] 参数:', JSON.stringify(params, null, 2));
+console.error('[DEBUG] 调用栈:', new Error().stack?.split('\n').slice(2, 6).join('\n'));
+console.error('========================================');
+
+// === Agent 循环专用 ===
+console.error('[Loop] 迭代: %d, 消息数: %d, Token 使用: %d',
+  iteration, messages.length, currentUsage.totalTokens);
+
+// === 工具执行专用 ===
+console.error('[Tool] %s 被调用，参数: %o', toolName, args);
+console.error('[Tool] 执行结果 success=%s, output 长度=%d',
+  result.success, result.output?.length);
+
+// === Provider 专用 ===
+console.error('[Provider] 发送请求 → model=%s, messages=%d, tools=%d',
+  options.model, messages.length, options.tools?.length ?? 0);
+
+// === 上下文管理专用 ===
+console.error('[Context] 估算 Token: %d / 预算: %d (%.1f%%)',
+  estimatedTokens, budget, (estimatedTokens / budget) * 100);
 ```
 
-#### 调试 LLM 提供商
+---
 
-调试 LLM 提供商（如 `src/providers/deepseek/provider.ts`）时：
+#### 常见调试问题速查表
 
-1. **检查 API 请求**：确认发送给 API 的消息格式是否正确
-2. **检查 API 响应**：查看原始 API 响应中的流式块
-3. **检查错误处理**：确认 API 错误被正确捕获和传递
+| 症状 | 可能原因 | 排查步骤 |
+|---|---|---|
+| LLM 返回空响应 | API 密钥无效或网络不通 | 1. `console.error` 打印 API 响应状态码 2. 在 `provider.ts` stream() 中检查是否抛异常 |
+| 工具调用失败 | 参数格式不匹配 schema | 1. 在 `executor.ts` 入口打 `console.error` 2. 对比工具 definition 和 LLM 传入的参数 |
+| 上下文被意外裁剪 | Token 估算偏大 | 1. 在 `manager.ts` trim() 中加日志 2. 检查估算比例是否正确（当前 4 chars/token） |
+| 流式输出卡顿 | 迭代器没有正确 yield | 1. 在 `provider.ts` for await 循环中加 `console.error` 2. 检查每个 chunk 是否及时 yield |
+| 斜杠命令不生效 | 命令解析错误 | 1. 在 `commands.ts` handleSlashCommand 打断点 2. 检查返回的 discriminated union 类型 |
+| 类型错误 | 类型定义不匹配 | 运行 `npm run typecheck` 获取完整错误列表 |
+| 构建成功但行为异常 | 编译输出与源码不一致 | 1. 检查 `dist/` 目录下的编译结果 2. 确认 `.js` 扩展名导入是否正确 |
+| 断点不命中 | Source Map 未正确映射 | 1. 确认 `tsconfig.json` 中 `"sourceMap": true` 2. 清除 `dist/` 重新构建 |
+| Vitest 调试不工作 | vitest.mjs 路径问题 | 确认使用 `${workspaceFolder}/node_modules/vitest/vitest.mjs` 路径 |
 
-```typescript
-// 在 provider.ts 中添加调试日志
-console.error('[Provider] 请求模型:', options.model);
-console.error('[Provider] 消息数:', messages.length);
-console.error('[Provider] 工具定义数:', options.tools?.length);
-```
-
-#### 调试上下文管理
-
-上下文管理器（`src/core/context/manager.ts`）负责 Token 预算和消息裁剪。调试时：
-
-```typescript
-// 在 manager.ts 中添加调试日志
-console.error('[Context] 当前 Token 估算:', estimatedTokens);
-console.error('[Context] Token 预算:', budget);
-console.error('[Context] 裁剪后消息数:', messages.length);
-```
-
-#### 常见调试场景
-
-| 场景 | 调试方法 |
-|---|---|
-| LLM 返回空响应 | 检查 API 密钥是否有效，网络是否连通 |
-| 工具调用失败 | 在 executor.ts 中添加日志，检查参数格式 |
-| 上下文被意外裁剪 | 在 manager.ts 中打印 Token 估算值和裁剪日志 |
-| 流式输出卡顿 | 检查 provider 的流式迭代器是否正确 yield 数据块 |
-| 类型错误 | 运行 `npm run typecheck` 定位类型不匹配 |
-| 构建成功但运行时行为异常 | 检查 `dist/` 输出文件确认编译结果 |
+---
 
 #### 使用测试进行调试
 
@@ -325,6 +510,9 @@ npx vitest --reporter=verbose
 
 # 使用 watch 模式在修改代码时自动重跑测试
 npx vitest
+
+# 仅运行匹配名称的测试
+npx vitest run -t "读取已存在的文件"
 ```
 
 ---

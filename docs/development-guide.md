@@ -230,103 +230,288 @@ Currently the project does not have a linter configured. Consider adding ESLint 
 
 ### Debugging
 
-#### Source Map Debugging
+CodeGrunt offers multiple debugging approaches, from quick log printing to full IDE breakpoint debugging. The following are listed in recommended order.
 
-Source maps are enabled (`"sourceMap": true` in `tsconfig.json`), so you can debug the compiled output in Node.js:
+---
 
-```bash
-node --inspect dist/cli/index.js
+#### Method 1: VS Code Built-in Breakpoint Debugging (Highly Recommended)
+
+The project includes a pre-configured `.vscode/launch.json` — ready to use out of the box. Press `Ctrl+Shift+D` to open the Debug panel, select a configuration from the dropdown, and press `F5` to start.
+
+**5 Debug Configurations:**
+
+| Configuration | Purpose | Use Case |
+|---|---|---|
+| 🚀 Launch REPL (Interactive Mode) | Start interactive CLI in debug mode | Debug command handling, REPL UI, input completion |
+| 🔧 One-Shot Task Debug | Execute a single task then exit | Debug the full Agent loop, tool call chain |
+| 🧪 Debug Current Test File | Run and debug the currently open test file | Debug a specific tool's unit test |
+| 🧪 Debug All Tests | Run and debug all tests | Check overall test quality |
+| 🌐 Chrome DevTools Remote Debug | Start with `--inspect`, debug in Chrome | When you prefer browser DevTools |
+
+**Configuration file (`.vscode/launch.json`):**
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "🚀 Launch REPL (Interactive Mode)",
+      "type": "node",
+      "request": "launch",
+      "runtimeArgs": ["--import", "tsx"],
+      "args": ["src/cli/index.ts"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "🔧 One-Shot Task Debug",
+      "type": "node",
+      "request": "launch",
+      "runtimeArgs": ["--import", "tsx"],
+      "args": ["src/cli/index.ts", "list files in the current directory"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "🧪 Debug Current Test File",
+      "type": "node",
+      "request": "launch",
+      "runtimeArgs": [
+        "--import", "tsx",
+        "${workspaceFolder}/node_modules/vitest/vitest.mjs"
+      ],
+      "args": ["run", "${relativeFile}"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "🧪 Debug All Tests",
+      "type": "node",
+      "request": "launch",
+      "runtimeArgs": [
+        "--import", "tsx",
+        "${workspaceFolder}/node_modules/vitest/vitest.mjs"
+      ],
+      "args": ["run"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "🌐 Chrome DevTools Remote Debug",
+      "type": "node",
+      "request": "launch",
+      "runtimeArgs": ["--inspect", "--import", "tsx"],
+      "args": ["src/cli/index.ts"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}
 ```
 
-Or debug directly with `tsx` (recommended, no build required):
+**Additional VS Code settings (`.vscode/settings.json`):**
+
+```json
+{
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true
+}
+```
+
+This ensures VS Code uses the project's installed TypeScript version, avoiding type-check inconsistencies.
+
+---
+
+#### Method 2: Chrome DevTools Remote Debugging
+
+If you prefer Chrome's browser developer tools, start with:
 
 ```bash
+# Start with --inspect flag from the terminal
 node --inspect --import tsx src/cli/index.ts
 ```
 
-Then open `chrome://inspect` in Chrome and click "Open dedicated DevTools for Node" to start debugging.
+Then open `chrome://inspect` in Chrome and click **"Open dedicated DevTools for Node"**. A dedicated DevTools window will open where you can:
 
-#### Using console.error for Debug Output
+- Set breakpoints on TypeScript source in the Sources panel
+- Execute expressions in the Console panel
+- View the call stack, variables, and scope
 
-Since CodeGrunt's tool output is communicated via stdout, use `console.error()` for debug output — it goes to stderr and won't interfere with tool output parsing:
+> **Note**: `tsconfig.json` already has `"sourceMap": true` enabled, so Source Maps automatically map compiled JS back to TypeScript source.
 
-```typescript
-// ✅ Correct: use console.error for debugging
-console.error('[Debug] Tool params:', params);
+---
 
-// ❌ Wrong: console.log will pollute tool output
-console.log('[Debug] Tool params:', params);
-```
+#### Method 3: console.error Log Debugging (Fastest)
 
-#### Debugging the Agent Loop
-
-The agent loop (`src/core/agent/loop.ts`) is the core of CodeGrunt. When debugging the agent loop, focus on these key areas:
-
-1. **System prompt construction**: Verify the system prompt correctly includes project guide (CODEGRUNT.md/CLAUDE.md) content
-2. **Message history**: Print the current message list in `ContextManager` to confirm context trimming works correctly
-3. **Tool call parsing**: Check that tool_call parameters from the LLM are parsed correctly
-4. **Streaming output**: Confirm that stream chunks (text_delta, reasoning_delta, tool_call_delta) are handled correctly
-
-Add temporary debug output in `loop.ts`:
+Since CodeGrunt's tool output is communicated via **stdout**, **never use `console.log()`** — it will pollute tool output and break parsing.
 
 ```typescript
-// Insert debug logs at key locations
-console.error('[Agent Loop] Iteration:', iteration);
-console.error('[Agent Loop] Message count:', messages.length);
-console.error('[Agent Loop] Tool calls:', toolCalls);
+// ✅ Correct: outputs to stderr, doesn't affect tool output
+console.error('[DEBUG] params:', params);
+console.error('[DEBUG] state:', JSON.stringify(state, null, 2));
+
+// ❌ Wrong: outputs to stdout, breaks tool output
+console.log('[DEBUG] params:', params);
 ```
 
-#### Debugging Tool Execution
+---
 
-The tool executor (`src/core/tools/executor.ts`) is responsible for executing tools called by the LLM. When debugging tool execution:
+#### Method 4: Development Hot-Reload Mode
 
-1. **Check tool registration**: Verify the tool is correctly registered in `registry.ts`
-2. **Validate parameter parsing**: Check that parameters from the LLM match the tool's parameter schema
-3. **Inspect execution results**: Check that the returned `ToolResult` structure is correct
+When you don't need full breakpoint debugging, watch mode is the fastest approach:
+
+```bash
+npm run dev
+```
+
+The program auto-restarts every time you save a file under `src/`. Combine with `console.error` logs for fast iteration.
+
+---
+
+#### Module Breakpoint Location Quick Reference
+
+Based on what you want to debug, set breakpoints at the corresponding file and location:
+
+| Debug Target | Key File | Recommended Breakpoint Location |
+|---|---|---|
+| **REPL startup flow** | `src/cli/repl.ts` | `startRepl()` function entry (~line 15) |
+| **User input handling** | `src/cli/input.ts` | `question()` function (~line 80) |
+| **Multi-line input parsing** | `src/cli/input.ts` | `isInputTuple()` return statement |
+| **@-reference resolution** | `src/cli/at-resolver.ts` | `resolveAtReferences()` function entry |
+| **Slash command dispatch** | `src/cli/commands.ts` | `handleSlashCommand()` switch statement |
+| **Agent Loop — message building** | `src/core/agent/loop.ts` | `messages.push()` call in `runAgentLoop()` |
+| **Agent Loop — LLM call** | `src/core/agent/loop.ts` | `provider.stream()` call site |
+| **Agent Loop — tool call parsing** | `src/core/agent/loop.ts` | After `toolCalls` variable assignment |
+| **Agent Loop — result return** | `src/core/agent/loop.ts` | `finalResponse` assignment |
+| **Tool registration** | `src/core/tools/registry.ts` | `getTool()` call site |
+| **Tool execution — parameter validation** | `src/core/tools/executor.ts` | `executeToolCall()` function entry |
+| **Tool execution — confirmation prompt** | `src/core/tools/executor.ts` | `confirm()` call site |
+| **Tool execution — result construction** | `src/core/tools/executor.ts` | `return` statement |
+| **read_file tool** | `src/core/tools/read_file.ts` | `execute()` function entry |
+| **write_file tool** | `src/core/tools/write_file.ts` | `execute()` entry, before `writeFile()` |
+| **edit_file tool** | `src/core/tools/edit_file.ts` | String match replacement logic |
+| **execute_shell tool** | `src/core/tools/execute_shell.ts` | Before/after `exec()` call |
+| **LLM request sending** | `src/providers/deepseek/provider.ts` | `stream()` method entry |
+| **LLM stream response handling** | `src/providers/deepseek/provider.ts` | Inside `for await` loop |
+| **Token usage stats** | `src/providers/deepseek/provider.ts` | `usage` object construction |
+| **Context trimming** | `src/core/context/manager.ts` | `trim()` method |
+| **Project guide loading** | `src/core/context/project-guide.ts` | `loadProjectGuide()` function |
+| **Configuration loading** | `src/config.ts` | `loadConfig()` function |
+| **Cost/balance query** | `src/utils/billing.ts` | `fetchBalance()` function |
+| **Diff preview** | `src/utils/confirm.ts` | `confirm()` function |
+
+---
+
+#### Hands-On: 5 Debugging Scenario Walkthroughs
+
+##### Scenario A: Debug REPL Startup and UI Interaction
+
+1. Open the project in VS Code
+2. Press `Ctrl+Shift+D` to switch to the Debug panel
+3. Select **"🚀 Launch REPL (Interactive Mode)"** from the dropdown
+4. Set a breakpoint at the `handleSlashCommand()` function entry in `src/cli/commands.ts` (press `F9`)
+5. Press `F5` to start debugging
+6. The program starts and the REPL shows a prompt in the integrated terminal
+7. Type `/help` and press Enter in the terminal
+8. The breakpoint triggers, you can:
+   - Press `F10` to Step Over
+   - Press `F11` to Step Into
+   - Hover over variables to inspect values
+   - Check the full scope in the Variables panel
+9. Continue execution (`F5`) and observe the `/help` output
+
+##### Scenario B: Debug a Complete Conversation Flow
+
+1. Select **"🔧 One-Shot Task Debug"**
+2. Set breakpoints in `runAgentLoop()` in `src/core/agent/loop.ts` at these locations:
+   - Function entry (inspect parameters)
+   - After `messages.push(userMessage)` (inspect message construction)
+   - At `provider.stream()` call (inspect LLM request)
+   - After `toolCalls` parsing (inspect tool calls)
+   - At `finalResponse` assignment (inspect final result)
+3. Press `F5` to start
+4. At each breakpoint, check:
+   - Whether the message list is correct (system + user)
+   - Whether the LLM request parameters are complete
+   - Whether tool call parameters match their definitions
+   - Whether the final response matches expectations
+5. Note: task execution requires an API key and will incur costs
+
+##### Scenario C: Debug a Specific Tool (Zero API Cost)
+
+1. Open the test file to debug, e.g. `tests/tools/read_file.test.ts`
+2. Select **"🧪 Debug Current Test File"**
+3. Set a breakpoint at the `execute()` entry of the corresponding tool source (e.g. `src/core/tools/read_file.ts`)
+4. Press `F5` — when the breakpoint triggers, you can single-step through the complete tool logic
+5. This is the most recommended approach: **zero API cost + rapid validation**
+
+##### Scenario D: Debug Context Trimming Logic
+
+1. Select **"🔧 One-Shot Task Debug"**
+2. Set a breakpoint at the `trim()` method in `src/core/context/manager.ts`
+3. Also set a breakpoint at the `addMessage()` method
+4. After launching, observe the token estimates and trimming behavior each time a message is added
+5. Use the debug console to run `messages.map(m => m.role)` to inspect message role distribution
+
+##### Scenario E: Debug with Chrome DevTools
+
+1. Select **"🌐 Chrome DevTools Remote Debug"**
+2. Press `F5` to start
+3. Open Chrome and go to `chrome://inspect`
+4. Click "Open dedicated DevTools for Node"
+5. In Sources panel → Filesystem → add the project folder
+6. Navigate to TypeScript files under `src/`, click line numbers to set breakpoints
+7. Enter commands in the REPL to trigger breakpoints
+
+---
+
+#### console.error Debug Log Templates
+
+Paste the following code into the function you need to debug:
 
 ```typescript
-// Add debug logs in executor.ts
-console.error('[Executor] Executing tool:', toolName);
-console.error('[Executor] Args:', JSON.stringify(args));
-console.error('[Executor] Result:', JSON.stringify(result));
+// === Generic Debug Template ===
+console.error('========================================');
+console.error('[DEBUG] Function:', 'functionName');
+console.error('[DEBUG] Params:', JSON.stringify(params, null, 2));
+console.error('[DEBUG] Stack:', new Error().stack?.split('\n').slice(2, 6).join('\n'));
+console.error('========================================');
+
+// === Agent Loop Specific ===
+console.error('[Loop] iteration: %d, messages: %d, token usage: %d',
+  iteration, messages.length, currentUsage.totalTokens);
+
+// === Tool Execution Specific ===
+console.error('[Tool] %s called, args: %o', toolName, args);
+console.error('[Tool] result success=%s, output length=%d',
+  result.success, result.output?.length);
+
+// === Provider Specific ===
+console.error('[Provider] request → model=%s, messages=%d, tools=%d',
+  options.model, messages.length, options.tools?.length ?? 0);
+
+// === Context Management Specific ===
+console.error('[Context] token estimate: %d / budget: %d (%.1f%%)',
+  estimatedTokens, budget, (estimatedTokens / budget) * 100);
 ```
 
-#### Debugging LLM Providers
+---
 
-When debugging LLM providers (e.g., `src/providers/deepseek/provider.ts`):
+#### Common Debugging Issues Quick Reference
 
-1. **Check API requests**: Verify the message format sent to the API is correct
-2. **Check API responses**: Inspect raw stream chunks from the API response
-3. **Check error handling**: Confirm API errors are properly caught and propagated
+| Symptom | Likely Cause | Troubleshooting Steps |
+|---|---|---|
+| LLM returns empty response | Invalid API key or network unreachable | 1. `console.error` the API response status code 2. Check for exceptions thrown in `provider.ts` stream() |
+| Tool call fails | Parameter format doesn't match schema | 1. Add `console.error` at `executor.ts` entry 2. Compare tool definition vs LLM-provided args |
+| Context unexpectedly trimmed | Token estimate too high | 1. Add logs in `manager.ts` trim() 2. Check estimation ratio (currently 4 chars/token) |
+| Streaming output stutters | Iterator not yielding correctly | 1. Add `console.error` in `provider.ts` for await loop 2. Check each chunk is yielded promptly |
+| Slash command not working | Command parsing error | 1. Set breakpoint in `commands.ts` handleSlashCommand 2. Check the returned discriminated union type |
+| Type errors | Type definition mismatch | Run `npm run typecheck` for complete error list |
+| Build succeeds but behavior is wrong | Compiled output differs from source | 1. Inspect `dist/` output 2. Verify `.js` extension imports are correct |
+| Breakpoints not hitting | Source Map not mapping correctly | 1. Confirm `tsconfig.json` has `"sourceMap": true` 2. Clear `dist/` and rebuild |
+| Vitest debugging not working | vitest.mjs path issue | Ensure `${workspaceFolder}/node_modules/vitest/vitest.mjs` path is used |
 
-```typescript
-// Add debug logs in provider.ts
-console.error('[Provider] Request model:', options.model);
-console.error('[Provider] Message count:', messages.length);
-console.error('[Provider] Tool definitions:', options.tools?.length);
-```
-
-#### Debugging Context Management
-
-The context manager (`src/core/context/manager.ts`) handles token budgeting and message trimming. When debugging:
-
-```typescript
-// Add debug logs in manager.ts
-console.error('[Context] Current token estimate:', estimatedTokens);
-console.error('[Context] Token budget:', budget);
-console.error('[Context] Messages after trim:', messages.length);
-```
-
-#### Common Debugging Scenarios
-
-| Scenario | Debug Method |
-|---|---|
-| LLM returns empty response | Check API key validity and network connectivity |
-| Tool call fails | Add logs in executor.ts, check parameter format |
-| Context unexpectedly trimmed | Print token estimates and trim logs in manager.ts |
-| Streaming output stutters | Check provider's async iterator yields chunks correctly |
-| Type errors | Run `npm run typecheck` to locate type mismatches |
-| Build succeeds but runtime behavior is wrong | Check `dist/` output files to verify compilation |
+---
 
 #### Using Tests for Debugging
 
@@ -341,6 +526,9 @@ npx vitest --reporter=verbose
 
 # Use watch mode to auto-rerun tests on code changes
 npx vitest
+
+# Run only tests matching a name pattern
+npx vitest run -t "reads an existing file"
 ```
 
 ---
