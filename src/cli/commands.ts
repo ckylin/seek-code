@@ -9,6 +9,7 @@ import { printBalanceAndUsage, formatDualCurrency, PRICING } from '../utils/bill
 import type { Skill } from './skills.js';
 import { getGlobalSkillsDir, createSkill } from './skills.js';
 import { validateApiKey } from '../providers/deepseek/client.js';
+import { MarkdownRenderer } from '../utils/markdown.js';
 
 export type SlashCommandResult =
   | { type: 'handled' }
@@ -970,6 +971,7 @@ If no issues are found, clearly state that the changes look correct. Be specific
   process.stdout.write(chalk.gray('Analyzing…'));
 
   let review = '';
+  const md = new MarkdownRenderer();
   try {
     const stream = provider.stream(reviewMessages, {
       model: config.model,
@@ -982,9 +984,13 @@ If no issues are found, clearly state that the changes look correct. Be specific
           process.stdout.write('\r' + ' '.repeat(20) + '\r');
         }
         review += chunk.text;
-        process.stdout.write(chunk.text);
+        const formatted = md.feed(chunk.text);
+        if (formatted) process.stdout.write(formatted);
       }
     }
+    // Flush any remaining markdown buffer (e.g. pending table)
+    const flushOut = md.flush();
+    if (flushOut) process.stdout.write(flushOut);
   } catch (err) {
     console.log(chalk.red('\nFailed to review: ' + (err instanceof Error ? err.message : String(err))));
     return;
