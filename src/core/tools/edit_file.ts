@@ -34,25 +34,20 @@ export const editFileTool: Tool = {
     const filePath = resolve(args.path as string);
     const oldString = args.old_string as string;
     const newString = args.new_string as string;
+    // Use pre-read content from executor if available (avoids double read)
+    const original = (args._originalContent as string | undefined) ?? await readFile(filePath, 'utf-8');
 
-    try {
-      const content = await readFile(filePath, 'utf-8');
-
-      if (!content.includes(oldString)) {
-        return {
-          success: false,
-          output: '',
-          error: `old_string not found in ${filePath}. The string must match exactly including whitespace and indentation.`,
-        };
-      }
-
-      const updated = content.replace(oldString, newString);
-      await writeFile(filePath, updated, 'utf-8');
-      printDiff(filePath, content, updated);
-      return { success: true, output: `Edited ${filePath}` };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { success: false, output: '', error: `Failed to edit ${filePath}: ${message}` };
+    if (!original.includes(oldString)) {
+      return {
+        success: false,
+        output: '',
+        error: `old_string not found in ${filePath}. The string must match exactly including whitespace and indentation.`,
+      };
     }
+
+    const updated = original.replace(oldString, newString);
+    await writeFile(filePath, updated, 'utf-8');
+    printDiff(filePath, original, updated);
+    return { success: true, output: `Edited ${filePath}` };
   },
 };

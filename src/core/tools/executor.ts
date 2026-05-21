@@ -4,25 +4,40 @@ import { resolve } from 'path';
 import type { ToolResult } from '../../types.js';
 import { getToolByName } from './registry.js';
 import { confirmEdit, applyEdit } from '../../utils/confirm.js';
-import type { ConfirmChoice } from '../../utils/confirm.js';
 
 // Module-level state for "yes for all" across tool calls
-// yesAllSession — resets at the start of each new user turn
 let yesAllSessionActive = false;
 
 export function resetYesAll(): void {
   yesAllSessionActive = false;
 }
 
-async function confirmOrSkip(filePath: string, newContent: string): Promise<boolean> {
-  if (yesAllSessionActive) return true;
+/**
+ * Show confirmation dialog for write/edit operations.
+ * Uses pre-read content when available to avoid redundant disk I/O.
+ *
+ * Returns the original file content so the tool can skip its own read.
+ */
+async function confirmOrSkip(
+  filePath: string,
+  newContent: string,
+  preReadOriginal?: string,
+): Promise<{ accepted: boolean; originalContent: string }> {
+  // Fast path: "yes for all" active — skip dialog, but still return
+  // original content for the tool's diff display.
+  if (yesAllSessionActive) {
+    const absPath = resolve(filePath);
+    const original = preReadOriginal !== undefined
+      ? preReadOriginal
+      : (existsSync(absPath) ? await readFile(absPath, 'utf-8') : '');
+    return { accepted: true, originalContent: original };
+  }
 
-  const choice: ConfirmChoice = await confirmEdit(filePath, newContent);
+  const { choice, originalContent } = await confirmEdit(filePath, newContent, preReadOriginal);
   if (choice === 'yes_all_session') {
     yesAllSessionActive = true;
-    return true;
   }
-  return choice === 'yes';
+  return { accepted: choice === 'yes' || choice === 'yes_all_session', originalContent };
 }
 
 export async function executeTool(
@@ -42,8 +57,7 @@ export async function executeTool(
     return { success: false, output: '', error: `Invalid JSON arguments for tool ${name}: ${argsJson}` };
   }
 
-  // Validate required parameters for each tool to avoid confusing Node.js errors
-  // (e.g., path.resolve(undefined) → "paths[0] must be of type string")
+  // Validate required parameters
   const requiredParams: Record<string, string[]> = {
     read_file: ['path'],
     write_file: ['path', 'content'],
@@ -60,27 +74,37 @@ export async function executeTool(
     }
   }
 
-  // Show diff and require confirmation before writing files
+  // ── Pre-read + confirm for destructive operations ──────────────────────
+  // We read the file once for diff preview, then pass the content to both
+  // the confirm dialog AND the tool. This eliminates 1-2 redundant disk reads
+  // per destructive operation (previously: executor read + confirm re-read +
+  // tool re-read = up to 3 reads per edit).
   if (name === 'edit_file') {
     const filePath = resolve(args.path as string);
     const oldString = args.old_string as string;
     const newString = args.new_string as string;
+
+    // Single read for both preview and the eventual edit
     const original = existsSync(filePath) ? await readFile(filePath, 'utf-8') : '';
     const preview = applyEdit(original, oldString, newString);
     if (preview === null) {
       return { success: false, output: '', error: `old_string not found in ${filePath}.` };
     }
-    const accepted = await confirmOrSkip(filePath, preview);
+
+    const { accepted } = await confirmOrSkip(filePath, preview, original);
     if (!accepted) {
       return { success: false, output: '', error: 'Edit rejected by user.', userRejected: true };
     }
+    args._originalContent = original;
   } else if (name === 'write_file') {
     const filePath = resolve(args.path as string);
     const content = args.content as string;
-    const accepted = await confirmOrSkip(filePath, content);
+
+    const { accepted, originalContent } = await confirmOrSkip(filePath, content);
     if (!accepted) {
       return { success: false, output: '', error: 'Write rejected by user.', userRejected: true };
     }
+    args._originalContent = originalContent;
   }
 
   // Inject cwd into execute_shell if the model didn't provide one

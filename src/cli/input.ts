@@ -4,17 +4,15 @@ import chalk from 'chalk';
 import stringWidth from 'string-width';
 import { getSessionUsage } from '../core/agent/loop.js';
 import type { Skill } from './skills.js';
+import { selectFromList } from '../utils/select.js';
+import { ACCENT } from '../utils/constants.js';
+import { acquireRawMode, releaseRawMode } from '../utils/rawMode.js';
+export type { SelectorItem } from '../utils/select.js';
+export { selectFromList };
 
 export interface InputResult {
   text: string;
   cancelled: boolean;
-}
-
-export interface SelectorItem {
-  value: string;
-  label: string;
-  desc?: string;
-  kind?: SlashCommandKind;
 }
 
 const SLASH_COMMANDS = [
@@ -32,6 +30,9 @@ const SLASH_COMMANDS = [
 ];
 
 export type SlashCommandKind = 'builtin' | 'skill';
+
+// Logo blue — matches banner.ts and display.ts
+const border = (w: number): string => chalk.hex(ACCENT)('─'.repeat(w));
 
 async function getFileCompletions(partial: string, cwd: string): Promise<string[]> {
   const SKIP = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__']);
@@ -53,7 +54,6 @@ async function getFileCompletions(partial: string, cwd: string): Promise<string[
   }
 }
 
-/** Detect which context file is active (CODEGRUNT.md > CLAUDE.md > none) */
 async function detectContextFile(cwd: string): Promise<string | null> {
   for (const name of ['CODEGRUNT.md', 'CLAUDE.md']) {
     try {
@@ -66,35 +66,62 @@ async function detectContextFile(cwd: string): Promise<string | null> {
   return null;
 }
 
-// Session history shared across calls
 const history: string[] = [];
 
-/** Split a code-point array into visual lines that each fit within maxW display columns. */
-function wrapLine(cps: string[], maxW: number): string[][] {
-  if (cps.length === 0) return [[]];
-  const result: string[][] = [];
-  let current: string[] = [];
-  let currentW = 0;
-  for (const cp of cps) {
-    const cw = stringWidth(cp);
-    if (currentW + cw > maxW && current.length > 0) {
-      result.push(current);
-      current = [cp];
-      currentW = cw;
-    } else {
-      current.push(cp);
-      currentW += cw;
-    }
+/** Build the hint line shown below the bottom border */
+function buildHintLine(model?: string, activeSkill?: string, contextFile?: string | null): string {
+  const usage = getSessionUsage();
+  const totalTokens = usage.inputTokens + usage.outputTokens;
+  const tokenStr = totalTokens > 0
+    ? (totalTokens >= 1000 ? (totalTokens / 1000).toFixed(1) + 'k' : String(totalTokens)) + ' tokens'
+    : '';
+
+  const sep = chalk.gray('  ·  ');
+  const parts: string[] = [];
+
+  if (activeSkill) {
+    parts.push(
+      chalk.bgHex('#6C63FF').hex('#FFFFFF').bold(' SKILL ') +
+      ' ' +
+      chalk.hex('#6C63FF').bold(activeSkill),
+    );
   }
-  result.push(current);
-  return result;
+  if (model) parts.push(chalk.hex(ACCENT)(model));
+  if (tokenStr) parts.push(chalk.gray(tokenStr));
+  if (contextFile) parts.push(chalk.gray('In ' + contextFile));
+
+  // Ref: Hint shows actually-available shortcuts, not phantom keys
+  const hint = activeSkill
+    ? chalk.gray('Ctrl+J newline  /exit to leave skill')
+    : chalk.gray('Ctrl+J newline  Esc clear  Ctrl+A/E ↖↘');
+
+  parts.push(hint);
+
+  return '  ' + parts.join(sep);
 }
 
-export function readMultilineInput(cwd = process.cwd(), model?: string, skills: Skill[] = [], activeSkill?: string): Promise<InputResult> {
-  return new Promise((resolve_p, reject) => {
+// ── Raw-mode input with bottom border ────────────────────────────────────────
+//
+// Layout (terminal width W):
+//
+//   <─────────────────── W ───────────────────>
+//   > <user input>
+//   -----------------------------------------   ← bottom border (accent color)
+//     model  ·  tokens  ·  hint               ← hint line (gray, below border)
+//
+// Only the bottom horizontal line uses special rendering; the input line itself
+// is plain text so readline/raw-mode cursor positioning stays trivial.
+
+export function readMultilineInput(
+  cwd = process.cwd(),
+  model?: string,
+  skills: Skill[] = [],
+  activeSkill?: string,
+): Promise<InputResult> {
+  return new Promise((resolve_p) => {
     const { stdin, stdout } = process;
 
-    // Non-TTY: read until EOF from stdin
+    // Non-TTY: read until EOF
     if (!stdin.isTTY) {
       let buf = '';
       const onData = (chunk: Buffer): void => { buf += chunk.toString(); };
@@ -108,17 +135,8 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
       return;
     }
 
-    // ── Raw-mode interactive input ──────────────────────────────────────────
-    //
-    // Panel layout:
-    //   ╭──────────────────────────────────────────────────────────────────╮
-    //   │ > <user input here>                                              │
-    //   ╰─ model  · ↑ tokens  · Ctrl+J 换行   Enter 发送 ────────────────╯
-    //
-    // cpBuf  — flat array of Unicode code points for the whole buffer
-    // cursor — code-point index into cpBuf
-
-    let cpBuf: string[] = [];
+    // ── State ────────────────────────────────────────────────────────────────
+    let cpBuf: string[] = [];          // Unicode code points
     let buffer = '';                   // cpBuf.join('') — kept in sync
     let cursor = 0;                    // code-point index
     let historyIdx = history.length;
@@ -127,53 +145,78 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
     let dropdownIdx = 0;
     let dropdownMode: 'slash' | 'at' = 'slash';
     let atCompletions: string[] = [];
-    // Terminal rows above the cursor that belong to our rendered block.
-    let linesAboveCursor = 0;
-    // Cached context file name (populated async before first render)
     let contextFile: string | null = null;
+    // Total number of lines written in the previous render call.
+    // Used to reliably clear the entire old block before re-rendering.
+    // This is more robust than tracking rowsAboveCursor (which can get out of
+    // sync after Escape, resize, or async callbacks), preventing old dropdown
+    // items from appearing to duplicate.
+    let lastRenderLineCount = 0;
+    // Total height of the rendered block (dropdown + input rows + border + hint).
+    // Used by onResize to clear with a safety margin, since terminal reflow
+    // after resize can shift the cursor's physical row, making lastRenderLineCount stale.
+    let lastBlockTotalHeight = 0;
+    // Cached slash command filter result — recomputed only when buffer changes.
+    let cachedFilteredCommands: Array<{ name: string; desc: string; kind: SlashCommandKind }> = [];
+    // Generation counter to prevent stale async file-completion results (race condition).
+    // Incremented each time we fire an async getFileCompletions; stale callbacks discard themselves.
+    let atGeneration = 0;
 
-    const syncBuffer = (): void => { buffer = cpBuf.join(''); };
+    /** Clamp cursor into [0, cpBuf.length] so it never goes out of bounds. */
+    const clampCursor = (): void => {
+      if (cursor < 0) cursor = 0;
+      if (cursor > cpBuf.length) cursor = cpBuf.length;
+    };
 
-    // ── Cleanup helper ──────────────────────────────────────────────────────
-    // Every exit path (commit, Ctrl+C, dropdown select) must call cleanup()
-    // before resolving/rejecting the promise.  This guarantees raw mode is
-    // always restored even if an async callback throws after setRawMode(true).
+    const syncBuffer = (): void => {
+      buffer = cpBuf.join('');
+      cachedFilteredCommands = getFilteredCommands();
+      clampCursor();
+    };
+
+    const termW = (): number => stdout.columns || 80;
+
+    acquireRawMode();
+
+    // Re-render on terminal resize — recompute cursor position under new width
+    // because the terminal reflows content, placing the cursor at the position
+    // corresponding to the same logical character but under the new column count.
+    // Use lastBlockTotalHeight + 2 as a safety margin: terminal reflow after
+    // resize can shift the cursor's physical row, making lastRenderLineCount stale.
+    const onResize = (): void => {
+      const clearRows = lastBlockTotalHeight > 0 ? lastBlockTotalHeight + 2 : 0;
+      if (clearRows > 0) {
+        stdout.write(`\x1B[${clearRows}A`);
+      }
+      stdout.write('\r\x1B[J');
+      lastRenderLineCount = 0;
+      lastBlockTotalHeight = 0;
+      render();
+    };
+    process.stdout.on('resize', onResize);
+
     const cleanup = (): void => {
-      stdin.setRawMode(false);
-      stdin.pause();
+      process.stdout.removeListener('resize', onResize);
+      releaseRawMode();
       stdin.removeListener('data', onData);
     };
 
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.setEncoding('utf8');
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
-    const PROMPT   = chalk.blue('> ');
-    const PROMPT_W = 2;  // display width of "> "
-    const CONT_PREFIX = '  '; // continuation line prefix (same width)
-
-    // Split cpBuf into logical lines at '\n' code points
-    const getLines = (): string[][] => {
-      const lines: string[][] = [[]];
-      for (const cp of cpBuf) {
-        if (cp === '\n') lines.push([]);
-        else lines[lines.length - 1].push(cp);
+    const getFilteredCommands = (): Array<{ name: string; desc: string; kind: SlashCommandKind }> => {
+      const all = [
+        ...SLASH_COMMANDS.map(c => ({ ...c, kind: 'builtin' as SlashCommandKind })),
+        ...skills.map(s => ({ name: '/' + s.name, desc: s.description ?? `skill (${s.source})`, kind: 'skill' as SlashCommandKind })),
+      ];
+      if (buffer === '/') return all;
+      if (buffer.startsWith('/') && buffer.length > 1 && buffer[1] !== ' ') {
+        return all.filter(c => c.name.startsWith(buffer));
       }
-      return lines;
+      return [];
     };
 
-    // Given a flat cursor position, return { lineIdx, colIdx } within getLines()
-    const cursorToLineCol = (): { lineIdx: number; colIdx: number } => {
-      let remaining = cursor;
-      const lines = getLines();
-      for (let i = 0; i < lines.length; i++) {
-        const lineLen = lines[i].length + (i < lines.length - 1 ? 1 : 0);
-        if (remaining <= lines[i].length) return { lineIdx: i, colIdx: remaining };
-        remaining -= lineLen;
-      }
-      const last = lines.length - 1;
-      return { lineIdx: last, colIdx: lines[last].length };
-    };
+    const isSlashMode = (): boolean =>
+      buffer === '/' || (buffer.startsWith('/') && buffer.length > 1 && buffer[1] !== ' ');
 
     /** Extract the @partial token immediately before the cursor, or null */
     const getAtPartial = (): string | null => {
@@ -182,244 +225,184 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
       return match ? match[1] : null;
     };
 
-    /** Replace the @partial before cursor with the completed value */
+    /**
+     * Initiate an async @-file completion request, protected by a generation
+     * counter to prevent stale results from overwriting fresh ones (race condition).
+     *
+     * IMPORTANT: Always call render() BEFORE firing the async request so the
+     * keystroke's effect (char insertion / deletion / cursor move) is reflected
+     * on screen immediately.  The dropdown will update when the async callback
+     * completes.  Without this, every keystroke after an @ feels laggy because
+     * render waits for file I/O.
+     */
+    const triggerAtCompletions = (): void => {
+      const partial = getAtPartial();
+      if (partial === null) {
+        if (dropdownMode === 'at') dropdownVisible = false;
+        render();
+        return;
+      }
+      // Render immediately so the typed character / cursor move is visible now
+      render();
+      const gen = ++atGeneration;
+      getFileCompletions(partial, cwd).then((completions) => {
+        // Discard stale results — another request was fired after this one.
+        if (gen !== atGeneration) return;
+        if (completions.length > 0) {
+          atCompletions = completions;
+          dropdownMode = 'at';
+          dropdownVisible = true;
+          dropdownIdx = 0;
+        } else {
+          if (dropdownMode === 'at') dropdownVisible = false;
+        }
+        render();
+      });
+    };
+
     const completeAt = (completion: string): void => {
       const before = cpBuf.slice(0, cursor).join('');
       const match = before.match(/@(\S*)$/);
       if (!match) return;
       const partialLen = match[1].length;
-      // Remove the partial and insert the completion
       cpBuf.splice(cursor - partialLen, partialLen, ...completion.split(''));
       cursor = cursor - partialLen + completion.length;
       syncBuffer();
     };
 
-    /** Build the bottom status bar content for the panel footer */
-    const buildStatusBar = (maxWidth?: number): string => {
-      const usage = getSessionUsage();
-      const totalTokens = usage.inputTokens + usage.outputTokens;
-      const tokenStr = totalTokens > 0
-        ? (totalTokens >= 1000 ? (totalTokens / 1000).toFixed(1) + 'k' : String(totalTokens)) + ' tokens'
-        : '';
+    // ── Render ────────────────────────────────────────────────────────────────
 
-      const skillPart = activeSkill ? chalk.bgHex('#6C63FF').hex('#FFFFFF').bold(' SKILL ') + ' ' + chalk.hex('#6C63FF').bold(activeSkill) : '';
-      const modelPart = model ? chalk.hex('#4A90D9')(model) : '';
-      const tokenPart = tokenStr ? chalk.gray('↑ ' + tokenStr) : '';
-      const ctxPart = contextFile ? chalk.gray('In ' + contextFile) : '';
-      const hintPart = activeSkill
-        ? chalk.gray('Ctrl+J 换行   Enter 发送   /exit 退出')
-        : chalk.gray('Ctrl+J 换行   Enter 发送');
-
-      // Build parts from most to least important; drop trailing parts if too wide
-      const sep = chalk.gray('  ·  ');
-      const sepW = 5; // '  ·  ' visible width
-      const candidates = [skillPart, modelPart, tokenPart, ctxPart, hintPart].filter(Boolean);
-
-      if (!maxWidth) return candidates.join(sep);
-
-      let result = '';
-      let usedW = 0;
-      for (const part of candidates) {
-        const plain = part.replace(/\x1b\[[0-9;]*m/g, '');
-        const partW = stringWidth(plain);
-        const addW = usedW === 0 ? partW : sepW + partW;
-        if (usedW + addW > maxWidth) break;
-        result += usedW === 0 ? part : sep + part;
-        usedW += addW;
-      }
-      return result;
-    };
+    /**
+     * How many terminal rows does a line of `visibleLen` columns occupy
+     * when the terminal is `w` columns wide?
+     * A line that exactly fills the terminal still occupies 1 row (no wrap).
+     */
+    const visualRows = (visibleLen: number, w: number): number =>
+      Math.max(1, Math.ceil(visibleLen / w));
 
     const render = (): void => {
-      const lines = getLines();
-      const termW = stdout.columns || 80;
-      // Reserve the rightmost column to avoid terminal auto-wrap "phantom cursor"
-      // state, which would corrupt our \r\n positioning and break linesAboveCursor.
-      const panelW = termW - 1;
-      const innerW = panelW - 4; // inside "│ " and " │"
+      const w = termW();
 
-      // Build dropdown items before moving cursor so we know the height
+      // Dropdown items (rendered above the top border)
       const dropItems = dropdownVisible
         ? (dropdownMode === 'slash'
-            ? getFilteredCommands().map(c => ({ label: c.name, desc: formatCommandDesc(c), kind: c.kind }))
+            ? cachedFilteredCommands.map(c => ({
+                label: c.name,
+                desc: c.desc || '',
+                kind: c.kind,
+              }))
             : atCompletions.map(c => ({ label: c, desc: '', kind: 'builtin' as SlashCommandKind })))
         : [];
-      const numDrop = dropItems.length;
 
-      // Hide cursor during repaint to prevent visible jump to top border.
+      // Hide cursor during repaint
       stdout.write('\x1B[?25l');
 
-      // Move up to the top of our previously rendered block, then erase downward.
-      // linesAboveCursor already includes dropdown rows from the previous render.
-      if (linesAboveCursor > 0) stdout.write(`\x1B[${linesAboveCursor}A`);
+      // Clear the entire previously rendered block by moving up lastRenderLineCount
+      // lines and erasing from there to end of screen.  This is more robust than
+      // the old rowsAboveCursor approach because it doesn't depend on the cursor
+      // still being exactly where we left it — it just rewinds the entire block.
+      if (lastRenderLineCount > 0) {
+        stdout.write(`\x1B[${lastRenderLineCount}A`);
+      }
       stdout.write('\r\x1B[J');
 
-      // ── Dropdown rendered ABOVE the panel ──────────────────────────────────
-      // This avoids pushing the panel downward (and scrolling the logo off screen).
-      if (numDrop > 0) {
-        for (let i = 0; i < numDrop; i++) {
-          const sel = i === dropdownIdx;
-          const cur = sel ? chalk.blue('  ❯ ') : '    ';
-          const labelText = dropItems[i].label;
-          const descText = dropItems[i].desc;
-          // Total visible width: "│ " (2) + cur (4) + label + "   " + desc
-          const fixedW = 2 + 4 + stringWidth(labelText);
-          const descSpace = Math.max(0, panelW - fixedW - 3);
-          const descTrim = descText
-            ? descText.slice(0, descSpace).replace(/\s+$/, '')
-            : '';
-          const label = sel
-            ? (dropItems[i].kind === 'builtin' ? chalk.bold.blue(labelText) : chalk.bold.white(labelText))
-            : (dropItems[i].kind === 'builtin' ? chalk.blue(labelText) : chalk.white(labelText));
-          const desc = descTrim ? chalk.gray('   ' + descTrim) : '';
-          stdout.write(chalk.gray('│ ') + cur + label + desc + '\r\n');
-        }
+      // Dropdown rows (above top border)
+      for (let i = 0; i < dropItems.length; i++) {
+        const sel = i === dropdownIdx;
+        const cur = sel ? chalk.hex(ACCENT)('  ❯ ') : '    ';
+        const labelText = dropItems[i].label;
+        const descText = dropItems[i].desc;
+        const label = sel
+          ? chalk.bold.hex(ACCENT)(labelText)
+          : (dropItems[i].kind === 'skill' ? chalk.white(labelText) : chalk.hex(ACCENT)(labelText));
+        const maxDescW = Math.max(0, w - 4 - stringWidth(labelText) - 3);
+        const desc = descText
+          ? chalk.gray('  ' + (dropItems[i].kind === 'skill' && !sel ? chalk.dim.gray('[skill] ') : '') + descText.slice(0, maxDescW))
+          : '';
+        stdout.write(cur + label + desc + '\r\n');
       }
 
-      // Wrap each logical line into visual lines that fit within availTextW.
-      const availTextW = innerW - PROMPT_W;
-      const visualLinesPerLogical: string[][][] = lines.map(l => wrapLine(l, availTextW));
-      const rowsPerLine = visualLinesPerLogical.map(vls => vls.length);
+      // Input line — may wrap across multiple rows when text is long
+      const inputText = cpBuf.join('');
+      const inputVisibleW = 2 + stringWidth(inputText); // "> " prefix = 2 cols
+      const inputRows = visualRows(inputVisibleW, w);
+      stdout.write(chalk.hex(ACCENT)('> ') + inputText + '\r\n');
 
-      // Compute cursor logical position before rendering.
-      const { lineIdx, colIdx } = cursorToLineCol();
+      // Bottom border (1 row)
+      stdout.write(border(w) + '\r\n');
 
-      // Top border
-      stdout.write(chalk.gray('╭' + '─'.repeat(panelW - 2) + '╮') + '\r\n');
+      // Hint line (1 row, below bottom border) — no trailing \r\n to avoid
+      // scrolling when hint is at the bottom of the terminal, which would
+      // shift all lines and corrupt lastRenderLineCount tracking.
+      stdout.write(buildHintLine(model, activeSkill, contextFile));
 
-      // Input lines — each logical line may span multiple visual rows.
-      for (let i = 0; i < lines.length; i++) {
-        const vls = visualLinesPerLogical[i];
-        for (let j = 0; j < vls.length; j++) {
-          const prefix = (i === 0 && j === 0) ? PROMPT : CONT_PREFIX;
-          const text = vls[j].join('');
-          const padLen = Math.max(0, availTextW - stringWidth(text));
-          stdout.write(chalk.gray('│ ') + prefix + text + ' '.repeat(padLen) + chalk.gray(' │') + '\r\n');
-        }
+      // ── Reposition cursor onto the input line ──────────────────────────────
+      // Cursor is now at the END of the hint line (no \r\n written).
+      // Distance to cursor row in input (moving up from hint line end):
+      //   1 (hint → border)
+      // + 1 (border → last input row)
+      // + rowsBelowCursorInInput (last input row → cursor row, going up)
+      const cursorTextW = stringWidth(cpBuf.slice(0, cursor).join(''));
+      const cursorColInInput = 2 + cursorTextW; // "> " = 2 cols
+
+      // Clamp cursor visual row to [0, effectiveInputRows-1] so the cursor never
+      // overflows onto the border line.
+      // Compute effectiveInputRows BEFORE clamping cursorVisualRow: when
+      // cursorColInInput is an exact multiple of w (cursor at start of a new
+      // visual row), Math.floor gives the correct row index but inputRows
+      // (computed from the full text width) may be one less, causing the old
+      // clamp to incorrectly push cursorVisualRow back by one row.
+      let cursorVisualRow = Math.floor(cursorColInInput / w);
+      const effectiveInputRows = Math.max(inputRows, cursorVisualRow + 1);
+      if (cursorVisualRow >= effectiveInputRows) {
+        cursorVisualRow = effectiveInputRows - 1;
       }
 
-      const BOTTOM_GAP = 1;
+      const rowsBelowCursorInInput = effectiveInputRows - 1 - cursorVisualRow;
+      const moveUp = 2 + rowsBelowCursorInInput;
+      stdout.write(`\r\x1B[${moveUp}A`);
 
-      // Bottom border with status bar
-      // "╰─ " (3) + content + " " (1) + "─"*fill + "╯" (1) = panelW
-      // Available width for content: panelW - 5
-      {
-        const available = panelW - 5; // panelW - len("╰─ ") - len(" ╯")
-        const statusContent = buildStatusBar(available);
-        const statusPlain = statusContent.replace(/\x1b\[[0-9;]*m/g, '');
-        const statusLen = stringWidth(statusPlain);
-        const borderFill = Math.max(0, available - statusLen);
-        stdout.write(
-          chalk.gray('╰─ ') + statusContent + chalk.gray(' ' + '─'.repeat(borderFill) + '╯') + '\r\n'
-        );
+      // Horizontal position within the cursor's visual row.
+      // When the cursor wraps to column 0 of a new line (cursorColInInput
+      // is an exact multiple of w), keep cursorCol at 0 — we've already
+      // placed it on the correct row above.
+      const cursorCol = cursorColInInput % w;
+      stdout.write('\r' + (cursorCol > 0 ? `\x1B[${cursorCol}C` : ''));
 
-        // Keep distance from terminal bottom (1 line ≈ ~14-16px)
-        for (let i = 0; i < BOTTOM_GAP; i++) {
-          stdout.write('\r\n');
-        }
-      }
-
-      // After writing bottom border + BOTTOM_GAP \r\n's, move up to the cursor's visual row.
-      // Find which visual line within lines[lineIdx] the cursor falls on.
-      const vls = visualLinesPerLogical[lineIdx];
-      let remaining = colIdx;
-      let visualLineIdx = 0;
-      while (visualLineIdx < vls.length - 1 && remaining >= vls[visualLineIdx].length) {
-        remaining -= vls[visualLineIdx].length;
-        visualLineIdx++;
-      }
-      const visualColIdx = remaining;
-
-      const cursorTextW = stringWidth(vls[visualLineIdx].slice(0, visualColIdx).join(''));
-      const visualCursorCol = 2 + PROMPT_W + cursorTextW;
-
-      // Visual rows of lines[lineIdx] above and below the cursor row.
-      const currentLinePartialRows = visualLineIdx;
-      const rowsBelowOnCursorLine = vls.length - visualLineIdx - 1;
-
-      let rowsBelowCursor = rowsBelowOnCursorLine + 1 /* bottom border */ + BOTTOM_GAP + 1 /* line after last \r\n */;
-      for (let i = lineIdx + 1; i < lines.length; i++) {
-        rowsBelowCursor += rowsPerLine[i];
-      }
-      stdout.write(`\x1B[${rowsBelowCursor}A`);
-
-      const colW = visualCursorCol % termW;
-      stdout.write('\r' + (colW > 0 ? `\x1B[${colW}C` : ''));
-
-      // Rows above cursor in our rendered block (used to erase on next render).
-      linesAboveCursor = numDrop + 1 /* top border */ + currentLinePartialRows;
-      for (let i = 0; i < lineIdx; i++) {
-        linesAboveCursor += rowsPerLine[i];
-      }
+      // Track distance from cursor to top of block so the next render (or
+      // clearPanel) can move up exactly to the block start and erase to EOD.
+      // After moveUp, cursor sits at row (dropItems.length + cursorVisualRow)
+      // inside the block — that is the distance we need to rewind next time.
+      lastRenderLineCount = dropItems.length + cursorVisualRow;
+      // Track total block height for resize clearing: dropdown rows + input rows
+      // + 1 border row + 1 hint row (hint has no \r\n but occupies a line).
+      lastBlockTotalHeight = dropItems.length + effectiveInputRows + 2;
 
       stdout.write('\x1B[?25h');
     };
 
-    const getFilteredCommands = (): Array<{ name: string; desc: string; kind: SlashCommandKind }> => {
-      const allCommands = [
-        ...SLASH_COMMANDS.map(c => ({ ...c, kind: 'builtin' as SlashCommandKind })),
-        ...skills.map((s) => ({ name: '/' + s.name, desc: s.description ?? `skill (${s.source})`, kind: 'skill' as SlashCommandKind })),
-      ];
-      if (buffer === '/') return allCommands;
-      if (buffer.startsWith('/') && buffer.length > 1 && buffer[1] !== ' ') {
-        return allCommands.filter((c) => c.name.startsWith(buffer));
-      }
-      return [];
-    };
+    // ── Erase panel ───────────────────────────────────────────────────────────
 
-    /** Format a command's description for dropdown display, with kind tag */
-    const formatCommandDesc = (cmd: ReturnType<typeof getFilteredCommands>[number]): string => {
-      const tag = cmd.kind === 'skill' ? chalk.dim.gray('[skill] ') : '';
-      return tag + (cmd.desc || '');
-    };
-
-    const isSlashMode = (): boolean =>
-      buffer === '/' || (buffer.startsWith('/') && buffer.length > 1 && buffer[1] !== ' ');
-
-    const showDropdown = (mode: 'slash' | 'at' = 'slash'): void => {
-      dropdownMode = mode;
-      dropdownVisible = true;
-      dropdownIdx = 0;
-      render();
-    };
-    const hideDropdown = (): void => { dropdownVisible = false; render(); };
-
-    const selectDropdownItem = (): void => {
-      if (dropdownMode === 'slash') {
-        const items = getFilteredCommands();
-        if (items.length === 0 || dropdownIdx >= items.length) return;
-        const selected = items[dropdownIdx].name;
-        dropdownVisible = false;
-        clearPanel();
-        stdout.write('\x1B[?25h');
-        cleanup();
-        history.push(selected);
-        resolve_p({ text: selected, cancelled: false });
-      } else {
-        // @ mode — complete the partial path
-        if (atCompletions.length === 0 || dropdownIdx >= atCompletions.length) return;
-        const selected = atCompletions[dropdownIdx];
-        completeAt(selected);
-        dropdownVisible = false;
-        render();
-      }
-    };
-
-    /** Erase the entire rendered panel and move cursor to a clean line */
     const clearPanel = (): void => {
-      if (linesAboveCursor > 0) stdout.write(`\x1B[${linesAboveCursor}A`);
+      // Cancel any in-flight async file-completion callbacks so they don't
+      // call render() after the panel has been cleared (ghost rendering).
+      atGeneration++;
+      if (lastRenderLineCount > 0) {
+        stdout.write(`\x1B[${lastRenderLineCount}A`);
+      }
+      // Always erase from column 0 of the current line (top of block) to end
+      // of screen — covers border + hint rows that sit below the cursor.
       stdout.write('\r\x1B[J');
-      linesAboveCursor = 0;
+      lastRenderLineCount = 0;
+      lastBlockTotalHeight = 0;
     };
+
+    // ── Commit ────────────────────────────────────────────────────────────────
 
     const commitInput = (): void => {
       const text = buffer.trim();
 
       if (text === '/') {
-        // Hand off to the full-screen selector.  We must stop listening on stdin
-        // before showSlashCommandSelector sets up its own listener, otherwise both
-        // handlers would fire on the same keystrokes.  cleanup() also restores raw
-        // mode so selectFromList can re-enter it cleanly via its own setRawMode(true).
         cleanup();
         dropdownVisible = false;
         clearPanel();
@@ -440,8 +423,8 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
       resolve_p({ text, cancelled: false });
     };
 
-    // Detect context file async, then render.
-    // Use .finally() so the panel always renders even if detection fails.
+    // ── Initial render (after context file detection) ─────────────────────────
+
     detectContextFile(cwd).then((f) => {
       contextFile = f;
     }).catch(() => {
@@ -450,8 +433,10 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
       render();
     });
 
+    // ── Key handler ───────────────────────────────────────────────────────────
+
     const onData = (key: string): void => {
-      // Ctrl+C — hard exit; restore terminal state before killing the process
+      // Ctrl+C
       if (key === '\x03') {
         clearPanel();
         stdout.write('\x1B[?25h');
@@ -459,9 +444,63 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
         process.exit(0);
       }
 
-      // Ctrl+J / Shift+Enter — insert newline
+      // ── Ctrl+A / Home — jump to beginning of line ──────────────────────────
+      if (key === '\x01' || key === '\x1B[H' || key === '\x1B[1~') {
+        cursor = 0;
+        // If dropdown is in @ mode, refresh completions at new cursor position
+        if (dropdownVisible && dropdownMode === 'at') { triggerAtCompletions(); return; }
+        render();
+        return;
+      }
+
+      // ── Ctrl+E / End — jump to end of line ──────────────────────────────────
+      if (key === '\x05' || key === '\x1B[F' || key === '\x1B[4~') {
+        cursor = cpBuf.length;
+        if (dropdownVisible && dropdownMode === 'at') { triggerAtCompletions(); return; }
+        render();
+        return;
+      }
+
+      // ── Ctrl+W — delete word backward ───────────────────────────────────────
+      if (key === '\x17') {
+        if (cursor > 0 && cpBuf.length > 0) {
+          // Find the start of the current/last word
+          let delStart = cursor - 1;
+          // Skip trailing whitespace
+          while (delStart >= 0 && cpBuf[delStart] === ' ') delStart--;
+          // Skip word characters
+          while (delStart >= 0 && cpBuf[delStart] !== ' ') delStart--;
+          delStart++; // move back to first char of the word
+          const count = cursor - delStart;
+          cpBuf.splice(delStart, count);
+          cursor = delStart;
+          syncBuffer();
+          if (dropdownMode === 'at') { triggerAtCompletions(); return; }
+          if (!isSlashMode()) { dropdownVisible = false; }
+          else if (cachedFilteredCommands.length === 0) { dropdownVisible = false; }
+          else if (dropdownIdx >= cachedFilteredCommands.length) { dropdownIdx = cachedFilteredCommands.length - 1; }
+        }
+        render();
+        return;
+      }
+
+      // ── Ctrl+K — kill (delete) from cursor to end of line ──────────────────
+      if (key === '\x0B') {
+        if (cursor < cpBuf.length) {
+          cpBuf.splice(cursor, cpBuf.length - cursor);
+          syncBuffer();
+          if (dropdownMode === 'at') { triggerAtCompletions(); return; }
+          if (!isSlashMode()) { dropdownVisible = false; }
+          else if (cachedFilteredCommands.length === 0) { dropdownVisible = false; }
+          else if (dropdownIdx >= cachedFilteredCommands.length) { dropdownIdx = cachedFilteredCommands.length - 1; }
+        }
+        render();
+        return;
+      }
+
+      // Ctrl+J / Shift+Enter — insert newline into buffer
       if (key === '\n' || key === '\x1B[13;2u' || key === '\x1B[27;2;13~') {
-        if (dropdownVisible) { hideDropdown(); return; }
+        if (dropdownVisible) { dropdownVisible = false; render(); return; }
         if (isSlashMode()) { commitInput(); return; }
         cpBuf.splice(cursor, 0, '\n');
         syncBuffer(); cursor++;
@@ -469,27 +508,27 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
         return;
       }
 
-      // Alt+Enter / Ctrl+D — submit (alternative)
+      // Alt+Enter / Ctrl+D — submit
       if (key === '\x1B\r' || key === '\x1B[13;3u' || key === '\x1B[27;3;13~' || key === '\x04') {
         if (dropdownVisible) { selectDropdownItem(); return; }
         commitInput();
         return;
       }
 
-      // Bare Escape — cancel dropdown or clear buffer
+      // Escape — cancel dropdown or clear buffer
       if (key === '\x1B') {
-        if (dropdownVisible) { hideDropdown(); return; }
+        if (dropdownVisible) { dropdownVisible = false; render(); return; }
         cpBuf = []; syncBuffer(); cursor = 0;
         historyIdx = history.length; historySavedDraft = null;
         render();
         return;
       }
 
-      // Arrow up — history prev / dropdown navigate
+      // Arrow up
       if (key === '\x1B[A') {
         if (dropdownVisible) {
-          const len = dropdownMode === 'slash' ? getFilteredCommands().length : atCompletions.length;
-          dropdownIdx = (dropdownIdx - 1 + len) % len;
+          const len = dropdownMode === 'slash' ? cachedFilteredCommands.length : atCompletions.length;
+          if (len > 0) { dropdownIdx = (dropdownIdx - 1 + len) % len; }
           render(); return;
         }
         if (historyIdx > 0) {
@@ -501,11 +540,11 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
         return;
       }
 
-      // Arrow down — history next / dropdown navigate
+      // Arrow down
       if (key === '\x1B[B') {
         if (dropdownVisible) {
-          const len = dropdownMode === 'slash' ? getFilteredCommands().length : atCompletions.length;
-          dropdownIdx = (dropdownIdx + 1) % len;
+          const len = dropdownMode === 'slash' ? cachedFilteredCommands.length : atCompletions.length;
+          if (len > 0) { dropdownIdx = (dropdownIdx + 1) % len; }
           render(); return;
         }
         if (historyIdx < history.length) {
@@ -533,7 +572,21 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
         return;
       }
 
-      // Enter — send message
+      // Delete key
+      if (key === '\x1B[3~') {
+        if (cursor < cpBuf.length) {
+          cpBuf.splice(cursor, 1);
+          syncBuffer();
+          if (dropdownMode === 'at') { triggerAtCompletions(); return; }
+          if (!isSlashMode()) { dropdownVisible = false; }
+          else if (cachedFilteredCommands.length === 0) { dropdownVisible = false; }
+          else if (dropdownIdx >= cachedFilteredCommands.length) { dropdownIdx = cachedFilteredCommands.length - 1; }
+        }
+        render();
+        return;
+      }
+
+      // Enter — submit
       if (key === '\r') {
         if (dropdownVisible) { selectDropdownItem(); return; }
         commitInput();
@@ -546,26 +599,12 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
           cpBuf.splice(cursor - 1, 1);
           syncBuffer(); cursor--;
           if (dropdownMode === 'at') {
-            const partial = getAtPartial();
-            if (partial !== null) {
-              getFileCompletions(partial, cwd).then((completions) => {
-                if (completions.length > 0) {
-                  atCompletions = completions;
-                  dropdownVisible = true;
-                  dropdownIdx = 0;
-                } else {
-                  dropdownVisible = false;
-                }
-                render();
-              });
-              return;
-            } else {
-              dropdownVisible = false;
-            }
+            triggerAtCompletions();
+            return;
           } else if (!isSlashMode()) {
             dropdownVisible = false;
           } else {
-            const items = getFilteredCommands();
+            const items = cachedFilteredCommands;
             if (items.length === 0) dropdownVisible = false;
             else if (dropdownIdx >= items.length) dropdownIdx = items.length - 1;
           }
@@ -574,17 +613,17 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
         return;
       }
 
-      // Tab
+      // Tab — complete
       if (key === '\t') {
         if (dropdownVisible) { selectDropdownItem(); }
         return;
       }
 
-      // Printable input — ASCII, CJK, emoji, IME batch
+      // Printable input
       if (!key.startsWith('\x1B') && key.charCodeAt(0) >= 0x20 && key.charCodeAt(0) !== 0x7F) {
         let incoming = [...key];
 
-        // Normalize Windows line endings from paste: \r\n -> \n, then lone \r -> \n
+        // Normalize Windows line endings from paste
         const normalized: string[] = [];
         for (let i = 0; i < incoming.length; i++) {
           if (incoming[i] === '\r' && incoming[i + 1] === '\n') {
@@ -601,35 +640,37 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
         syncBuffer(); cursor += incoming.length;
 
         if (buffer === '/' && !dropdownVisible) {
-          showDropdown('slash');
+          dropdownMode = 'slash'; dropdownVisible = true; dropdownIdx = 0; render();
         } else if (isSlashMode() && dropdownVisible && dropdownMode === 'slash') {
-          const items = getFilteredCommands();
+          const items = cachedFilteredCommands;
           if (items.length === 0) dropdownVisible = false;
           else if (dropdownIdx >= items.length) dropdownIdx = 0;
           render();
         } else if (!isSlashMode() && dropdownVisible && dropdownMode === 'slash') {
-          hideDropdown();
+          dropdownVisible = false; render();
         } else {
-          // Check for @ completion trigger
-          const partial = getAtPartial();
-          if (partial !== null) {
-            getFileCompletions(partial, cwd).then((completions) => {
-              if (completions.length > 0) {
-                atCompletions = completions;
-                dropdownMode = 'at';
-                dropdownVisible = true;
-                dropdownIdx = 0;
-              } else {
-                if (dropdownMode === 'at') dropdownVisible = false;
-              }
-              render();
-            });
-          } else {
-            if (dropdownMode === 'at') dropdownVisible = false;
-            render();
-          }
+          triggerAtCompletions();
         }
         return;
+      }
+    };
+
+    const selectDropdownItem = (): void => {
+      if (dropdownMode === 'slash') {
+        const items = cachedFilteredCommands;
+        if (items.length === 0 || dropdownIdx >= items.length) return;
+        const selected = items[dropdownIdx].name;
+        dropdownVisible = false;
+        clearPanel();
+        stdout.write('\x1B[?25h');
+        cleanup();
+        history.push(selected);
+        resolve_p({ text: selected, cancelled: false });
+      } else {
+        if (atCompletions.length === 0 || dropdownIdx >= atCompletions.length) return;
+        completeAt(atCompletions[dropdownIdx]);
+        dropdownVisible = false;
+        render();
       }
     };
 
@@ -637,19 +678,17 @@ export function readMultilineInput(cwd = process.cwd(), model?: string, skills: 
   });
 }
 
-/**
- * Show an interactive selector with all available slash commands
- * when the user types just "/" and presses Enter.
- */
-async function showSlashCommandSelector(skills: Skill[] = []): Promise<string | null> {
-  const builtinItems: SelectorItem[] = SLASH_COMMANDS.map((cmd) => ({
+// ── Slash command full-screen selector ────────────────────────────────────────
+
+export async function showSlashCommandSelector(skills: Skill[] = []): Promise<string | null> {
+  const builtinItems = SLASH_COMMANDS.map((cmd) => ({
     value: cmd.name,
     label: cmd.name,
     desc: cmd.desc,
     kind: 'builtin' as SlashCommandKind,
   }));
 
-  const skillItems: SelectorItem[] = skills.map((s) => ({
+  const skillItems = skills.map((s) => ({
     value: '/' + s.name,
     label: '/' + s.name,
     desc: `${chalk.dim.gray('[skill]')} ${s.description ?? `(${s.source})`}`,
@@ -665,88 +704,10 @@ async function showSlashCommandSelector(skills: Skill[] = []): Promise<string | 
     items,
   );
   if (selected) {
-    process.stdout.write(chalk.blue('> ') + selected + '\n');
+    process.stdout.write(chalk.hex(ACCENT)('> ') + selected + '\n');
   }
   return selected;
 }
 
 // ── Arrow-key list selector ───────────────────────────────────────────────────
-
-function clearLines(n: number): void {
-  if (n <= 0) return;
-  process.stdout.write(`\x1B[${n}A\r\x1B[J`);
-}
-
-export function selectFromList(
-  title: string,
-  items: SelectorItem[],
-  currentValue?: string,
-): Promise<string | null> {
-  return new Promise((resolve_p) => {
-    const { stdin, stdout } = process;
-
-    if (!stdin.isTTY) {
-      resolve_p(items[0]?.value ?? null);
-      return;
-    }
-
-    let idx = Math.max(0, items.findIndex((i) => i.value === currentValue));
-    let lastHeight = 0;
-
-    const buildLines = (): string[] => {
-      const out: string[] = [];
-      out.push(chalk.bold('  ' + title));
-      out.push('');
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        const sel = i === idx;
-        const cur = sel ? chalk.blue('  ❯ ') : '    ';
-        const label = sel
-          ? (item.kind === 'builtin' ? chalk.bold.blue(item.label) : chalk.bold.white(item.label))
-          : (item.kind === 'builtin' ? chalk.blue(item.label) : chalk.white(item.label));
-        const desc = item.desc
-          ? chalk.gray('   ' + item.desc.slice(0, (stdout.columns || 80) - item.label.length - 12))
-          : '';
-        out.push(cur + label + desc);
-      }
-      out.push('');
-      out.push(chalk.gray('  ↑↓ navigate   Enter select   Esc cancel'));
-      return out;
-    };
-
-    const render = (): void => {
-      clearLines(lastHeight);
-      const outputLines = buildLines();
-      stdout.write(outputLines.join('\r\n'));
-      lastHeight = outputLines.length - 1;
-    };
-
-    const cleanup = (): void => {
-      stdin.setRawMode(false);
-      stdin.pause();
-      stdin.removeListener('data', onData);
-      stdout.write('\n');
-    };
-
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.setEncoding('utf8');
-    stdout.write('\n');
-    lastHeight = 0;
-    render();
-
-    const onData = (key: string): void => {
-      // Ctrl+C inside a selector cancels the selection (same as Esc).
-      // We do NOT exit the process here — the caller decides what to do with null.
-      // Rejecting with AbortError would require every call site to add a catch,
-      // which is easy to forget and causes unhandled-rejection crashes.
-      if (key === '\x03') { cleanup(); resolve_p(null); return; }
-      if (key === '\x1B') { cleanup(); resolve_p(null); return; }
-      if (key === '\x1B[A') { idx = (idx - 1 + items.length) % items.length; render(); return; }
-      if (key === '\x1B[B') { idx = (idx + 1) % items.length; render(); return; }
-      if (key === '\r' || key === '\n') { cleanup(); resolve_p(items[idx].value); return; }
-    };
-
-    stdin.on('data', onData);
-  });
-}
+// selectFromList is re-exported from ../utils/select.ts above

@@ -321,17 +321,11 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<void> {
       // ── Anti-hallucination: detect "blind write" pattern ─────────────────
       // If the model issues write/edit without any read/search/list in the
       // same batch and hasn't read anything this turn, inject a one-time
-      // reminder. This catches the most common hallucination vector: jumping
-      // straight to generating code without grounding in the codebase.
+      // reminder after tool results complete. Must NOT go between
+      // assistant(tool_calls) and tool messages — the API forbids that.
       const hasWriteInBatch = toolCalls.some(tc => WRITE_TOOL_NAMES.has(tc.function.name));
       const hasReadInBatch = toolCalls.some(tc => READ_TOOL_NAMES.has(tc.function.name));
-      if (hasWriteInBatch && !hasReadInBatch && !hasReadThisTurn && !warnedBlindWrite) {
-        warnedBlindWrite = true;
-        const warning = lang === 'zh'
-          ? '⚠️ 检测到直接写入操作：你尚未读取任何项目文件就尝试编辑代码。这极大增加了凭空编造不存在的 API/类型/模式的风险。建议在写入之前先用 read_file 或 search_files 了解现有代码风格和可用的接口。'
-          : '⚠️ Blind write detected: you are attempting to edit code without having read any project files first. This greatly increases the risk of inventing non-existent APIs, types, or patterns. Consider using read_file or search_files to ground yourself before writing.';
-        context.push({ role: 'user', content: warning });
-      }
+      const shouldWarnBlindWrite = hasWriteInBatch && !hasReadInBatch && !hasReadThisTurn && !warnedBlindWrite;
 
       for (const tc of toolCalls) {
         let parsedArgs: Record<string, unknown> = {};
@@ -373,6 +367,17 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<void> {
         if (result.userRejected) {
           return;
         }
+      }
+
+      // Inject blind-write warning after all tool results so the model
+      // sees it on the next reasoning iteration. Placed here (not between
+      // assistant(tool_calls) and tool messages) to satisfy API constraints.
+      if (shouldWarnBlindWrite) {
+        warnedBlindWrite = true;
+        const warning = lang === 'zh'
+          ? '⚠️ 检测到直接写入操作：你尚未读取任何项目文件就尝试编辑代码。这极大增加了凭空编造不存在的 API/类型/模式的风险。建议在写入之前先用 read_file 或 search_files 了解现有代码风格和可用的接口。'
+          : '⚠️ Blind write detected: you are attempting to edit code without having read any project files first. This greatly increases the risk of inventing non-existent APIs, types, or patterns. Consider using read_file or search_files to ground yourself before writing.';
+        context.push({ role: 'user', content: warning });
       }
 
       // continue loop — model will process tool results

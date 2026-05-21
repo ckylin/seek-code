@@ -94,17 +94,39 @@ export class ContextManager {
       }
       this.messages.splice(startIdx, removeCount);
     } else if (msg && msg.role === 'tool') {
-      // Standalone tool message without preceding assistant(tool_calls) —
-      // this can happen if the assistant was already removed. Skip it
-      // to avoid breaking the stream, and also skip any contiguous tool messages.
-      let removeCount = 1;
-      while (
-        startIdx + removeCount < this.messages.length &&
-        this.messages[startIdx + removeCount].role === 'tool'
+      // Tool message at trim boundary. If the preceding message is an
+      // assistant(tool_calls), we must remove them together to avoid
+      // sending an orphaned tool_calls to the API (which triggers a 400
+      // error: "insufficient tool messages following tool_calls message").
+      const prev = startIdx > 0 ? this.messages[startIdx - 1] : undefined;
+      if (
+        prev &&
+        prev.role === 'assistant' &&
+        'tool_calls' in prev &&
+        prev.tool_calls
       ) {
-        removeCount++;
+        // Remove assistant(tool_calls) + all contiguous following tool messages
+        let removeCount = 2; // assistant + this tool
+        while (
+          startIdx + removeCount - 1 < this.messages.length &&
+          this.messages[startIdx + removeCount - 1].role === 'tool'
+        ) {
+          removeCount++;
+        }
+        this.messages.splice(startIdx - 1, removeCount);
+      } else {
+        // Standalone tool message without preceding assistant(tool_calls) —
+        // this can happen if the assistant was already removed. Skip it
+        // to avoid breaking the stream, and also skip any contiguous tool messages.
+        let removeCount = 1;
+        while (
+          startIdx + removeCount < this.messages.length &&
+          this.messages[startIdx + removeCount].role === 'tool'
+        ) {
+          removeCount++;
+        }
+        this.messages.splice(startIdx, removeCount);
       }
-      this.messages.splice(startIdx, removeCount);
     } else {
       // Plain message (user, assistant without tool_calls, system) — safe to remove
       this.messages.splice(startIdx, 1);

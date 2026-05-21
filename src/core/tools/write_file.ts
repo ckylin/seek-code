@@ -1,4 +1,4 @@
-import { writeFile as fsWriteFile, mkdir, readFile } from 'fs/promises';
+import { writeFile as fsWriteFile, mkdir } from 'fs/promises';
 import { dirname, resolve } from 'path';
 import type { Tool, ToolResult } from '../../types.js';
 import { printDiff } from '../../utils/display.js';
@@ -29,10 +29,10 @@ export const writeFileTool: Tool = {
   async execute(args): Promise<ToolResult> {
     const filePath = resolve(args.path as string);
     const content = args.content as string;
+    // Use pre-read content from executor if available (avoids double read)
+    const oldContent = (args._originalContent as string | undefined) ?? '';
     try {
       await mkdir(dirname(filePath), { recursive: true });
-      // Read existing content for diff (empty string if file doesn't exist yet)
-      const oldContent = await readFile(filePath, 'utf-8').catch(() => '');
       await fsWriteFile(filePath, content, 'utf-8');
       printDiff(filePath, oldContent, content);
       return { success: true, output: `Wrote ${content.length} chars to ${filePath}` };

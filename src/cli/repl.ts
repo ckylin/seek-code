@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import { runAgentLoop } from '../core/agent/loop.js';
 import { ContextManager } from '../core/context/manager.js';
 import { DeepSeekProvider } from '../providers/deepseek/provider.js';
-import { createInterruptController } from '../utils/interrupt.js';
+import { createInterruptController, getActiveInterruptCount } from '../utils/interrupt.js';
 import { printError, printUserMessage } from '../utils/display.js';
 import { resolveAtReferences } from './at-resolver.js';
 import { handleSlashCommand } from './commands.js';
@@ -54,6 +54,7 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
   // Fallback: if SIGINT fires outside raw-mode input (e.g. during agent run
   // when the interrupt controller has already been cleaned up), exit cleanly.
   process.on('SIGINT', () => {
+    if (getActiveInterruptCount() > 0) return;
     process.stdout.write(chalk.yellow('\nInterrupted.\n'));
     process.exit(0);
   });

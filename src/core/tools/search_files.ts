@@ -1,9 +1,61 @@
-import { readdir, readFile } from 'fs/promises';
-import { join, resolve, relative } from 'path';
+import { createReadStream, statSync } from 'fs';
+import { readdir } from 'fs/promises';
+import { join, resolve, extname } from 'path';
+import { createInterface } from 'readline';
 import type { Tool, ToolResult } from '../../types.js';
 
 const MAX_RESULTS = 50;
+const MAX_FILE_BYTES = 512 * 1024; // 512 KB — skip binary/large files
+const CONCURRENCY = 32; // parallel file reads — higher since we stream
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__', '.cache']);
+// File extensions likely to be text — everything else is skipped for safety/speed
+const TEXT_EXTS = new Set([
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts',
+  '.py', '.pyi', '.pyx',
+  '.rs', '.go', '.java', '.kt', '.kts', '.scala',
+  '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx',
+  '.cs', '.vb',
+  '.rb', '.php', '.pl', '.pm', '.swift',
+  '.json', '.jsonc', '.json5', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
+  '.xml', '.html', '.htm', '.css', '.scss', '.less', '.sass',
+  '.md', '.mdx', '.markdown', '.txt', '.rst', '.adoc',
+  '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
+  '.sql', '.graphql', '.gql',
+  '.vue', '.svelte', '.astro', '.sol',
+  '.prisma', '.proto', '.thrift',
+  '.env', '.gitignore', '.dockerignore', '.editorconfig',
+  '.Dockerfile', 'Dockerfile',
+  'Makefile', 'CMakeLists.txt',
+]);
+
+/** Stream-search a single file; returns up to maxMatches line snippets. Stops reading as soon as limit is hit. */
+function searchFileStream(absPath: string, pattern: string, relPath: string, maxMatches: number): Promise<string[]> {
+  return new Promise((res) => {
+    let size = 0;
+    try { size = statSync(absPath).size; } catch { res([]); return; }
+    if (size > MAX_FILE_BYTES) { res([]); return; }
+
+    const matches: string[] = [];
+    let lineNo = 0;
+
+    const stream = createReadStream(absPath, { highWaterMark: 65536 });
+    const rl = createInterface({ input: stream, crlfDelay: Infinity });
+
+    rl.on('line', (line) => {
+      lineNo++;
+      if (line.includes(pattern)) {
+        matches.push(`${relPath}:${lineNo}: ${line.trim()}`);
+        if (matches.length >= maxMatches) {
+          rl.close();
+          stream.destroy();
+        }
+      }
+    });
+
+    rl.on('close', () => res(matches));
+    stream.on('error', () => res(matches));
+  });
+}
 
 export const searchFilesTool: Tool = {
   definition: {
@@ -37,64 +89,87 @@ export const searchFilesTool: Tool = {
     const searchPath = resolve((args.path as string | undefined) ?? '.');
     const filePattern = args.file_pattern as string | undefined;
 
+    if (!pattern) {
+      return { success: false, output: '', error: 'Missing required parameter "pattern"' };
+    }
+
     const results: string[] = [];
+    let pending: Array<{ root: string; relDir: string }> = [{ root: searchPath, relDir: '' }];
+    let fileQueue: Array<{ root: string; relPath: string }> = [];
 
+    // ── Phase 1: collect all candidate files (parallel BFS) ──
     try {
-      await searchDir(searchPath, searchPath, pattern, filePattern, results);
-
-      if (results.length === 0) {
-        return { success: true, output: `No matches found for "${pattern}"` };
+      while (pending.length > 0) {
+        const batch = pending.splice(0, CONCURRENCY);
+        const dirResults = await Promise.all(
+          batch.map(async ({ root, relDir }) => {
+            const absDir = join(root, relDir);
+            let entries;
+            try {
+              entries = await readdir(absDir, { withFileTypes: true });
+            } catch {
+              return { subdirs: [] as Array<{ root: string; relDir: string }>, files: [] as Array<{ root: string; relPath: string }> };
+            }
+            const subdirs: Array<{ root: string; relDir: string }> = [];
+            const files: Array<{ root: string; relPath: string }> = [];
+            for (const e of entries) {
+              if (e.name.startsWith('.')) continue;
+              const rel = join(relDir, e.name);
+              if (e.isDirectory()) {
+                if (!SKIP_DIRS.has(e.name)) subdirs.push({ root, relDir: rel });
+              } else if (e.isFile()) {
+                if (filePattern && !e.name.endsWith(filePattern)) continue;
+                const ext = extname(e.name) || e.name;
+                if (TEXT_EXTS.has(ext) || TEXT_EXTS.has(e.name)) {
+                  files.push({ root, relPath: rel });
+                }
+              }
+            }
+            return { subdirs, files };
+          })
+        );
+        for (const r of dirResults) {
+          pending.push(...r.subdirs);
+          fileQueue.push(...r.files);
+        }
       }
-
-      const truncated = results.length > MAX_RESULTS;
-      const output = results.slice(0, MAX_RESULTS).join('\n') +
-        (truncated ? `\n… (showing first ${MAX_RESULTS} of ${results.length} matches)` : '');
-
-      return { success: true, output };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { success: false, output: '', error: `Search failed: ${message}` };
     }
+
+    // ── Phase 2: stream-search files in parallel batches; stop early when full ──
+    try {
+      while (fileQueue.length > 0 && results.length < MAX_RESULTS) {
+        const remaining = MAX_RESULTS - results.length;
+        const batch = fileQueue.splice(0, CONCURRENCY);
+        const batchResults = await Promise.all(
+          batch.map(({ root, relPath }) =>
+            searchFileStream(join(root, relPath), pattern, relPath, Math.min(3, remaining))
+          )
+        );
+        for (const matches of batchResults) {
+          for (const m of matches) {
+            if (results.length >= MAX_RESULTS) break;
+            results.push(m);
+          }
+          if (results.length >= MAX_RESULTS) break;
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { success: false, output: '', error: `Search failed: ${message}` };
+    }
+
+    if (results.length === 0) {
+      return { success: true, output: `No matches found for "${pattern}"` };
+    }
+
+    const truncated = results.length >= MAX_RESULTS && fileQueue.length > 0;
+    return {
+      success: true,
+      output: results.join('\n') +
+        (truncated ? `\n… (showing first ${MAX_RESULTS} matches, more files remain)` : ''),
+    };
   },
 };
-
-async function searchDir(
-  root: string,
-  dir: string,
-  pattern: string,
-  filePattern: string | undefined,
-  results: string[],
-): Promise<void> {
-  if (results.length >= MAX_RESULTS) return;
-
-  const entries = await readdir(dir, { withFileTypes: true });
-
-  for (const entry of entries) {
-    if (results.length >= MAX_RESULTS) return;
-    if (entry.name.startsWith('.')) continue;
-
-    const fullPath = join(dir, entry.name);
-
-    if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue;
-      await searchDir(root, fullPath, pattern, filePattern, results);
-    } else {
-      if (filePattern && !entry.name.endsWith(filePattern)) continue;
-
-      try {
-        const content = await readFile(fullPath, 'utf-8');
-        const lines = content.split('\n');
-        const rel = relative(root, fullPath);
-
-        for (let i = 0; i < lines.length; i++) {
-          if (lines[i].includes(pattern)) {
-            results.push(`${rel}:${i + 1}: ${lines[i].trim()}`);
-            if (results.length >= MAX_RESULTS) return;
-          }
-        }
-      } catch {
-        // skip unreadable files
-      }
-    }
-  }
-}
