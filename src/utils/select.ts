@@ -91,5 +91,6 @@ export function selectFromList(
     };
 
     stdin.on('data', onData);
+    stdin.resume();
   });
 }

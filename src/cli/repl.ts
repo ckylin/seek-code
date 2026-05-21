@@ -3,6 +3,7 @@ import { runAgentLoop } from '../core/agent/loop.js';
 import { ContextManager } from '../core/context/manager.js';
 import { DeepSeekProvider } from '../providers/deepseek/provider.js';
 import { createInterruptController, getActiveInterruptCount } from '../utils/interrupt.js';
+import { drainInternalBuffer } from '../utils/rawMode.js';
 import { printError, printUserMessage } from '../utils/display.js';
 import { resolveAtReferences } from './at-resolver.js';
 import { handleSlashCommand } from './commands.js';
@@ -11,36 +12,6 @@ import { readMultilineInput } from './input.js';
 import { loadSkills } from './skills.js';
 import { saveConfig, supportsReasoning, CONTEXT_BUDGET, CHAT_CONTEXT_BUDGET } from '../config.js';
 import type { CodeGruntConfig, LLMProvider } from '../types.js';
-
-/**
- * Drain any buffered stdin data. Safe to call after readMultilineInput
- * returns (which pauses stdin and removes its data listener).
- *
- * Uses both read() and a temporary flowing-mode listener to reliably
- * consume data on all platforms. Without a listener, resume() on Windows
- * may not actually pull data from the OS buffer.
- */
-async function drainStdin(): Promise<void> {
-  if (!process.stdin.isTTY) return;
-
-  // First, drain anything already in Node's internal buffer (works in paused mode).
-  while (process.stdin.read() !== null) { /* drain */ }
-
-  // Attach a temporary data listener so that resume() actually consumes
-  // data from the OS buffer (important on Windows).
-  const noop = (): void => {};
-  process.stdin.on('data', noop);
-  process.stdin.resume();
-
-  // Wait for any lingering OS-buffered data to be delivered.
-  await new Promise<void>((res) => setTimeout(res, 50));
-
-  process.stdin.removeListener('data', noop);
-  process.stdin.pause();
-
-  // Final sweep — catch anything that arrived during the wait.
-  while (process.stdin.read() !== null) { /* drain */ }
-}
 
 export async function startRepl(initialConfig: CodeGruntConfig, initialProvider: LLMProvider): Promise<void> {
   const cwd = process.cwd();
@@ -61,13 +32,14 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
 
   printBanner(config.model);
 
-  const loop = async (): Promise<void> => {
+  // ── Main REPL loop (iterative, not recursive — avoids stack growth) ──────
+  while (true) {
     const result = await readMultilineInput(cwd, config.model, skills);
 
-    if (result.cancelled) { await loop(); return; }
+    if (result.cancelled) continue;
 
     const raw = result.text;
-    if (!raw) { await loop(); return; }
+    if (!raw) continue;
 
     if (raw === 'exit' || raw === 'quit') {
       console.log(chalk.gray('Goodbye.'));
@@ -125,7 +97,7 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
           } finally {
             interrupt.cleanup();
           }
-          await drainStdin();
+          drainInternalBuffer();
         } else {
           // No args: enter skill mode with a dedicated input box
           await enterSkillMode(skillName, cmd.prompt, skillSystem);
@@ -134,8 +106,7 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
         skills = await loadSkills(cwd);
         console.log(chalk.gray('Skills reloaded.\n'));
       }
-      await loop();
-      return;
+      continue;
     }
 
     // @ references
@@ -161,19 +132,19 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
       interrupt.cleanup();
     }
 
-    // Drain stray keystrokes that landed during the agent run so they
-    // don't leak into the next readMultilineInput panel.
-    await drainStdin();
-
-    await loop();
-  };
+    // Drain stray keystrokes that landed in Node's internal buffer during the
+    // agent run so they don't leak into the next readMultilineInput panel.
+    // The interrupt controller's listener already consumed OS-level keystrokes
+    // in real time, so a simple internal-buffer drain is sufficient here.
+    drainInternalBuffer();
+  }
 
   /**
    * Enter skill interaction mode: multi-turn conversation scoped to the skill.
    * Uses an isolated ContextManager seeded with recent main-context messages.
    * Type /exit, exit, /quit, quit, or submit an empty line to exit back to the main loop.
    */
-  const enterSkillMode = async (skillName: string, skillContent: string, skillSystem?: string): Promise<void> => {
+  async function enterSkillMode(skillName: string, skillContent: string, skillSystem?: string): Promise<void> {
     printUserMessage(`/${skillName}`);
     console.log(chalk.gray(`  [Skill "${skillName}"] — /exit 退出  |  空提交退出  |  Esc 清空输入\n`));
 
@@ -183,10 +154,7 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
     const skillContext = new ContextManager(supportsReasoning(config.model) ? CONTEXT_BUDGET : CHAT_CONTEXT_BUDGET);
 
     // Drain buffered data from the Enter key that submitted /skill-name.
-    // Without this, the first readMultilineInput in the skill loop may
-    // receive leftover bytes and return immediately with empty input,
-    // causing the input panel to "disappear".
-    await drainStdin();
+    drainInternalBuffer();
 
     while (true) {
       const skillResult = await readMultilineInput(cwd, config.model, skills, skillName);
@@ -213,21 +181,13 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
         interrupt.cleanup();
       }
 
-      // Drain buffered data that accumulated during the agent run
-      // (e.g. accidental key presses while watching the AI response).
-      // Without this, buffered characters (especially Enter) will be
-      // read by the next readMultilineInput and may trigger an immediate
-      // empty submit, exiting skill mode and hiding the input panel.
-      await drainStdin();
+      drainInternalBuffer();
     }
 
-    // Drain again after exiting the skill loop, so any leftover bytes
-    // from the final submit don't leak into the main REPL loop's first
-    // readMultilineInput and corrupt its render.
-    await drainStdin();
+    // Drain again after exiting the skill loop so any leftover bytes from the
+    // final submit don't leak into the main REPL loop's readMultilineInput.
+    drainInternalBuffer();
 
     console.log(chalk.gray('  已退出 skill.\n'));
-  };
-
-  await loop();
+  }
 }

@@ -197,8 +197,8 @@ export function readMultilineInput(
 
     const cleanup = (): void => {
       process.stdout.removeListener('resize', onResize);
-      releaseRawMode();
       stdin.removeListener('data', onData);
+      releaseRawMode();
     };
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -597,7 +597,8 @@ export function readMultilineInput(
       if (key === '\x7F' || key === '\b') {
         if (cursor > 0) {
           cpBuf.splice(cursor - 1, 1);
-          syncBuffer(); cursor--;
+          cursor--;
+          syncBuffer();
           if (dropdownMode === 'at') {
             triggerAtCompletions();
             return;
@@ -675,6 +676,7 @@ export function readMultilineInput(
     };
 
     stdin.on('data', onData);
+    stdin.resume();
   });
 }
 

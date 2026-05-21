@@ -38,6 +38,7 @@ export function createInterruptController(): InterruptController {
   if (process.stdin.isTTY) {
     acquireRawMode();
     process.stdin.on('data', escHandler);
+    process.stdin.resume();
     escListening = true;
   }
 
