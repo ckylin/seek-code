@@ -12,6 +12,14 @@ import { printError } from '../utils/display.js';
 import { runSetup } from './setup.js';
 import { installSkillFromZip, removeSkill, getGlobalSkillsDir } from './skills.js';
 
+// ── Harness-style: Service Container & Event Bus ─────────────────────────
+// These are initialized here and passed to sub-systems. The agent loop
+// uses the Pipeline architecture internally.
+import { getDefaultEventBus } from '../core/events/bus.js';
+import { getLogger } from '../core/observability/logger.js';
+
+const log = getLogger('cli');
+
 const program = new Command();
 
 program
@@ -32,6 +40,14 @@ program
     }
 
     const provider = new DeepSeekProvider(config);
+    const bus = getDefaultEventBus();
+
+    // Wire up error logging via event bus
+    bus.on('error', (event) => {
+      if (event.type === 'error') {
+        log.error(`[${event.source}] ${event.message}`, { stack: event.stack });
+      }
+    });
 
     if (task) {
       // One-shot mode
@@ -53,6 +69,13 @@ program
           process.stdout.write(chalk.yellow('\nInterrupted.\n'));
         } else {
           printError(err instanceof Error ? err.message : String(err));
+          bus.emit({
+            type: 'error',
+            source: 'cli',
+            message: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+            timestamp: Date.now(),
+          });
           process.exit(1);
         }
       } finally {

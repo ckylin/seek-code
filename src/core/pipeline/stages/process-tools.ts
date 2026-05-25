@@ -1,0 +1,128 @@
+// ── Stage 3: Process Tool Calls ─────────────────────────────────────────────
+// Executes tool calls returned by the model, handles confirm flow for
+// destructive operations, tracks read/write patterns for anti-hallucination.
+//
+// Ref: Original tool execution logic extracted from src/core/agent/loop.ts
+// and src/core/tools/executor.ts
+
+import type { Stage, StageResult, PipelineContext } from '../types.js';
+import type { ToolCallMessage } from '../../../types.js';
+import { READ_TOOL_NAMES, WRITE_TOOL_NAMES } from '../types.js';
+import { getToolByName } from '../../tools/registry.js';
+import { resetYesAll, executeToolCall } from './process-tools-helpers.js';
+import { getLogger } from '../../observability/logger.js';
+import { getDefaultEventBus, type ToolCallEvent, type ToolResultEvent } from '../../events/bus.js';
+import { getDefaultMetrics } from '../../observability/metrics.js';
+
+const log = getLogger('stage:process-tools');
+
+export class ProcessToolCallsStage implements Stage {
+  readonly name = 'process-tool-calls';
+
+  async execute(ctx: PipelineContext): Promise<StageResult> {
+    // Reset per-turn state before processing
+    resetYesAll();
+
+    if (ctx.finishReason !== 'tool_calls' || ctx.toolCalls.length === 0) {
+      return { continue: true, done: false };
+    }
+
+    const bus = getDefaultEventBus();
+    const metrics = getDefaultMetrics();
+
+    // Push assistant(tool_calls) message to context
+    ctx.messages.push({
+      role: 'assistant',
+      content: null,
+      tool_calls: ctx.toolCalls,
+      ...(ctx.reasoningText ? { reasoning_content: ctx.reasoningText } : {}),
+    } as ToolCallMessage);
+
+    // Anti-hallucination: detect blind write pattern
+    const hasWriteInBatch = ctx.toolCalls.some(tc => WRITE_TOOL_NAMES.has(tc.function.name));
+    const hasReadInBatch = ctx.toolCalls.some(tc => READ_TOOL_NAMES.has(tc.function.name));
+    const shouldWarnBlindWrite = hasWriteInBatch && !hasReadInBatch && !ctx.hasReadThisTurn && !ctx.warnedBlindWrite;
+
+    for (const tc of ctx.toolCalls) {
+      let parsedArgs: Record<string, unknown> = {};
+      try {
+        parsedArgs = JSON.parse(tc.function.arguments) as Record<string, unknown>;
+      } catch {
+        // leave empty — executor will report the error
+      }
+
+      // Track reads for blind-write detection
+      if (READ_TOOL_NAMES.has(tc.function.name)) {
+        ctx.hasReadThisTurn = true;
+      }
+
+      // Emit event
+      const toolEvent: ToolCallEvent = {
+        type: 'tool:called',
+        toolName: tc.function.name,
+        args: parsedArgs,
+        iteration: ctx.iteration,
+        timestamp: Date.now(),
+      };
+      bus.emit(toolEvent);
+
+      metrics.increment(`tool.${tc.function.name}.calls`);
+      const toolTimer = metrics.startTimer(`tool.${tc.function.name}`);
+
+      let result;
+      try {
+        result = await executeToolCall(tc.function.name, tc.function.arguments, ctx.cwd);
+      } catch (err) {
+        result = {
+          success: false,
+          output: '',
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+
+      toolTimer();
+
+      // Emit result event
+      const resultEvent: ToolResultEvent = {
+        type: 'tool:result',
+        toolName: tc.function.name,
+        success: result.success,
+        error: result.error,
+        userRejected: result.userRejected,
+        timestamp: Date.now(),
+      };
+      bus.emit(resultEvent);
+
+      if (!result.success) {
+        metrics.increment(`tool.${tc.function.name}.errors`);
+      }
+
+      // Push tool result to context
+      ctx.messages.push({
+        role: 'tool',
+        tool_call_id: tc.id,
+        content: result.success ? result.output : (result.error ?? result.output),
+      });
+
+      if (result.userRejected) {
+        log.info('Tool call rejected by user', { tool: tc.function.name });
+        return { continue: false, done: true, userRejected: true };
+      }
+    }
+
+    // Inject blind-write warning after all tool results
+    if (shouldWarnBlindWrite) {
+      ctx.warnedBlindWrite = true;
+      const warning = ctx.language === 'zh'
+        ? '⚠️ 检测到直接写入操作：你尚未读取任何项目文件就尝试编辑代码。这极大增加了凭空编造不存在的 API/类型/模式的风险。建议在写入之前先用 read_file 或 search_files 了解现有代码风格和可用的接口。'
+        : '⚠️ Blind write detected: you are attempting to edit code without having read any project files first. This greatly increases the risk of inventing non-existent APIs, types, or patterns. Consider using read_file or search_files to ground yourself before writing.';
+      ctx.messages.push({ role: 'user', content: warning });
+      log.warn('Blind write warning injected');
+    }
+
+    return { continue: true, done: false };
+  }
+}
+
+// ── Tool execution helper (extracted from executor) ──────────────────────
+// Imported from process-tools-helpers to keep this file focused on the stage logic

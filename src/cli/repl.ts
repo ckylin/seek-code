@@ -3,7 +3,8 @@ import { runAgentLoop } from '../core/agent/loop.js';
 import { ContextManager } from '../core/context/manager.js';
 import { DeepSeekProvider } from '../providers/deepseek/provider.js';
 import { createInterruptController, getActiveInterruptCount } from '../utils/interrupt.js';
-import { drainInternalBuffer } from '../utils/rawMode.js';
+import { drainInternalBuffer, forceRestoreTerminal } from '../utils/rawMode.js';
+
 import { printError, printUserMessage } from '../utils/display.js';
 import { resolveAtReferences } from './at-resolver.js';
 import { handleSlashCommand } from './commands.js';
@@ -12,6 +13,12 @@ import { readMultilineInput } from './input.js';
 import { loadSkills } from './skills.js';
 import { saveConfig, supportsReasoning, CONTEXT_BUDGET, CHAT_CONTEXT_BUDGET } from '../config.js';
 import type { CodeGruntConfig, LLMProvider } from '../types.js';
+
+// ── Harness-style: Pipeline / Events / Observability ─────────────────────
+import { getLogger } from '../core/observability/logger.js';
+import { getDefaultMetrics } from '../core/observability/metrics.js';
+
+const log = getLogger('repl');
 
 export async function startRepl(initialConfig: CodeGruntConfig, initialProvider: LLMProvider): Promise<void> {
   const cwd = process.cwd();
@@ -22,17 +29,26 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
   let provider: LLMProvider = initialProvider;
   let skills = await loadSkills(cwd);
 
+  const metrics = getDefaultMetrics();
+
   // Fallback: if SIGINT fires outside raw-mode input (e.g. during agent run
   // when the interrupt controller has already been cleaned up), exit cleanly.
   process.on('SIGINT', () => {
     if (getActiveInterruptCount() > 0) return;
+    forceRestoreTerminal();
     process.stdout.write(chalk.yellow('\nInterrupted.\n'));
+
+    // Print metrics summary on exit if telemetry enabled
+    if (process.env.CODEGRUNT_TELEMETRY === '1') {
+      metrics.printSummary();
+    }
+
     process.exit(0);
   });
 
   printBanner(config.model);
 
-  // ── Main REPL loop (iterative, not recursive — avoids stack growth) ──────
+  // ── Main REPL loop (iterative, not recursive — avoids stack growth) ──
   while (true) {
     const result = await readMultilineInput(cwd, config.model, skills);
 
@@ -43,6 +59,9 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
 
     if (raw === 'exit' || raw === 'quit') {
       console.log(chalk.gray('Goodbye.'));
+      if (process.env.CODEGRUNT_TELEMETRY === '1') {
+        metrics.printSummary();
+      }
       process.exit(0);
     }
 
@@ -52,6 +71,9 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
 
       if (cmd.type === 'exit') {
         console.log(chalk.gray('Goodbye.'));
+        if (process.env.CODEGRUNT_TELEMETRY === '1') {
+          metrics.printSummary();
+        }
         process.exit(0);
       }
 
@@ -72,16 +94,10 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
       } else if (cmd.type === 'skill_run') {
         const skillName = raw.slice(1).split(' ')[0];
         const hasArgs = raw.slice(skillName.length + 1).trim().length > 0;
-        // If the skill doesn't define its own system prompt, use a neutral
-        // default so the coding-assistant identity doesn't interfere with
-        // the skill's role (e.g. Bazi master, translator, etc.).
         const skillSystem = cmd.system ?? 'You are a helpful AI assistant. Follow the user\'s instructions carefully.';
 
         if (hasArgs) {
-          // Inline args: /skill-name args... — run immediately
           printUserMessage(`/${raw.slice(1).split(' ')[0]}`);
-          // Use a fresh context for skill runs so the coding-assistant system
-          // prompt doesn't conflict with the skill's role (e.g. Bazi master).
           const skillBudget = supportsReasoning(config.model) ? CONTEXT_BUDGET : CHAT_CONTEXT_BUDGET;
           const skillContext = new ContextManager(skillBudget);
           const interrupt = createInterruptController();
@@ -93,13 +109,13 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
               process.stdout.write(chalk.yellow('\nInterrupted.\n'));
             } else {
               printError(err instanceof Error ? err.message : String(err));
+              log.error('Skill run failed', { error: err instanceof Error ? err.message : String(err) });
             }
           } finally {
             interrupt.cleanup();
           }
           drainInternalBuffer();
         } else {
-          // No args: enter skill mode with a dedicated input box
           await enterSkillMode(skillName, cmd.prompt, skillSystem);
         }
       } else if (cmd.type === 'skills_reload') {
@@ -116,8 +132,6 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
       process.stdout.write(chalk.gray(`  Injecting: ${labels}\n`));
     }
 
-    printUserMessage(raw);
-
     const interrupt = createInterruptController();
     try {
       process.stdout.write('\n');
@@ -127,33 +141,21 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
         process.stdout.write(chalk.yellow('\nInterrupted.\n'));
       } else {
         printError(err instanceof Error ? err.message : String(err));
+        log.error('Agent loop failed', { error: err instanceof Error ? err.message : String(err) });
       }
     } finally {
       interrupt.cleanup();
     }
 
-    // Drain stray keystrokes that landed in Node's internal buffer during the
-    // agent run so they don't leak into the next readMultilineInput panel.
-    // The interrupt controller's listener already consumed OS-level keystrokes
-    // in real time, so a simple internal-buffer drain is sufficient here.
     drainInternalBuffer();
   }
 
-  /**
-   * Enter skill interaction mode: multi-turn conversation scoped to the skill.
-   * Uses an isolated ContextManager seeded with recent main-context messages.
-   * Type /exit, exit, /quit, quit, or submit an empty line to exit back to the main loop.
-   */
+  // ── Skill mode ────────────────────────────────────────────────────────
   async function enterSkillMode(skillName: string, skillContent: string, skillSystem?: string): Promise<void> {
     printUserMessage(`/${skillName}`);
     console.log(chalk.gray(`  [Skill "${skillName}"] — /exit 退出  |  空提交退出  |  Esc 清空输入\n`));
 
-    // Fresh isolated context for skill mode — prevents main conversation
-    // history (especially code-related tool calls) from leaking in and
-    // confusing the LLM about what it should be doing.
     const skillContext = new ContextManager(supportsReasoning(config.model) ? CONTEXT_BUDGET : CHAT_CONTEXT_BUDGET);
-
-    // Drain buffered data from the Enter key that submitted /skill-name.
     drainInternalBuffer();
 
     while (true) {
@@ -163,7 +165,6 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
 
       const rawText = skillResult.text.trim();
 
-      // Empty input or explicit exit commands leave skill mode
       if (!rawText || rawText === '/exit' || rawText === '/quit' || rawText === 'exit' || rawText === 'quit') break;
 
       const fullPrompt = `${skillContent}\n\n---\n${rawText}`;
@@ -184,10 +185,7 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
       drainInternalBuffer();
     }
 
-    // Drain again after exiting the skill loop so any leftover bytes from the
-    // final submit don't leak into the main REPL loop's readMultilineInput.
     drainInternalBuffer();
-
     console.log(chalk.gray('  已退出 skill.\n'));
   }
 }

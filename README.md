@@ -25,7 +25,7 @@ codegrunt "把 auth 模块重构为 async/await"
 
 ## 特性
 
-- **🤖 智能代理** — 使用 ReAct（推理 + 行动）循环，自主执行多步骤任务：读取文件、编辑代码、运行 Shell、搜索代码库
+- **🤖 智能代理** — 使用 P/G/E（Planner / Generator / Evaluator）架构，自主分解并执行多步骤任务：规划→执行→评估→修正，确保输出质量
 - **📂 理解代码库** — 通过 `@` 文件引用和项目指南文件（`CODEGRUNT.md` / `CLAUDE.md`）理解你的项目结构、模块导入和编码约定
 - **🔌 DeepSeek 驱动** — 内置支持 DeepSeek Chat、V4 Flash、V4 Pro 和 R1 推理模型
 - **🛠️ 工具调用** — 6 个内置工具：文件读写/编辑、Shell 执行、目录列表、代码搜索，破坏性操作会显示 diff 预览并请求用户确认

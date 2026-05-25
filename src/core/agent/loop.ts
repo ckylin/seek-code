@@ -1,22 +1,68 @@
-import type {
-  AgentRunOptions,
-  Message,
-  ToolCall,
-  ToolCallMessage,
-} from '../../types.js';
+// ── Agent Loop with P/G/E Architecture ────────────────────────────────────
+// Planner / Generator / Evaluator pattern adapted for DeepSeek models.
+//
+// Flow:
+//   1. Planner analyzes the task → produces structured TaskPlan (2-5 steps)
+//   2. For each plan step:
+//      a. Generator (existing pipeline stages) executes the step
+//      b. Evaluator checks output quality / plan adherence / hallucinations
+//      c. If evaluation fails → Refiner feeds issues back, retries (max 2x)
+//   3. Final summary output
+//
+// DeepSeek adaptation:
+//   - Planner uses low-temperature (0.1) structured JSON output
+//   - Evaluator combines structural checks (no LLM) + LLM quality assessment
+//   - Max 2 refines per step to avoid infinite loops
+//   - Fallback to single-step execution if planning fails
+//
+// Ref: pipeline/types.ts for TaskPlan, EvaluationResult
+// Ref: planner.ts, evaluator.ts for P/E implementations
+// Ref: pipeline/stages/*.ts for Generator stages
+
+import type { AgentRunOptions, Message, ToolCall, ToolCallMessage } from '../../types.js';
 import chalk from 'chalk';
 import ora from 'ora';
 import { ContextManager } from '../context/manager.js';
 import { loadProjectGuide } from '../context/project-guide.js';
 import { getToolDefinitions } from '../tools/registry.js';
-import { executeTool, resetYesAll } from '../tools/executor.js';
-import { printToolCall, printToolResult, printAssistantHeader, printThinkingCollapsed } from '../../utils/display.js';
+import { resetYesAll } from '../pipeline/stages/process-tools-helpers.js';
+import {
+  printToolCall, printToolResult, printAssistantHeader, printThinkingCollapsed,
+  printPlanHeader, printStepProgress, printEvaluation, printRefineIndicator,
+  printIntentResult,
+} from '../../utils/display.js';
 import { MarkdownRenderer } from '../../utils/markdown.js';
-import { isReasonerModel, CHAT_CONTEXT_BUDGET } from '../../config.js';
+import { CHAT_CONTEXT_BUDGET } from '../../config.js';
+
+// ── P/G/E modules ────────────────────────────────────────────────────────
+import { detectIntent } from './intentor.js';
+import { generatePlan } from './planner.js';
+import { evaluateStep } from './evaluator.js';
+import type { TaskPlan, EvaluationResult, IntentResult } from '../pipeline/types.js';
+
+// ── Pipeline imports ─────────────────────────────────────────────────────
+import {
+  PipelineEngine,
+  PipelineBuilder,
+} from '../pipeline/engine.js';
+import type { PipelineContext } from '../pipeline/types.js';
+import type { StreamEmitter } from '../pipeline/types.js';
+import { PrepareContextStage } from '../pipeline/stages/prepare-context.js';
+import { StreamResponseStage } from '../pipeline/stages/stream-response.js';
+import { ProcessToolCallsStage } from '../pipeline/stages/process-tools.js';
+import { PostProcessStage } from '../pipeline/stages/post-process.js';
+
+// ── Event bus / Observability ────────────────────────────────────────────
+import { getDefaultEventBus, type ErrorEvent } from '../events/bus.js';
+import { getDefaultMetrics } from '../observability/metrics.js';
+import { getLogger } from '../observability/logger.js';
+
+const log = getLogger('agent');
 
 const MAX_ITERATIONS = 30;
+const MAX_REFINE_RETRIES = 2;
 
-// ── Cumulative usage tracking ──────────────────────────────────────────────
+// ── Cumulative usage tracking (kept for backward compat) ─────────────────
 const sessionUsage = { inputTokens: 0, outputTokens: 0, cacheHitTokens: 0, cacheMissTokens: 0 };
 export function addUsage(u: { inputTokens: number; outputTokens: number; cacheHitTokens: number; cacheMissTokens: number }): void {
   sessionUsage.inputTokens += u.inputTokens;
@@ -34,15 +80,14 @@ export function resetSessionUsage(): void {
   sessionUsage.cacheMissTokens = 0;
 }
 
-// Detect the system language from environment variables / locale.
-// Returns 'zh' for Chinese systems, otherwise 'en'.
+// ── Language detection ───────────────────────────────────────────────────
+
 function detectSystemLanguage(): 'zh' | 'en' {
   const locale = process.env.LC_ALL
     || process.env.LC_MESSAGES
     || process.env.LANG
     || '';
   if (locale.toLowerCase().startsWith('zh')) return 'zh';
-  // Also check Windows system locale
   if (process.platform === 'win32') {
     try {
       const resolved = Intl.DateTimeFormat().resolvedOptions().locale;
@@ -52,339 +97,407 @@ function detectSystemLanguage(): 'zh' | 'en' {
   return 'en';
 }
 
-// Read-type tools: acquiring information without side effects.
-// Used by the anti-hallucination check to detect whether the model has
-// grounded itself in project context before making changes.
-const READ_TOOL_NAMES = new Set(['read_file', 'search_files', 'list_directory']);
-const WRITE_TOOL_NAMES = new Set(['write_file', 'edit_file']);
+// ── UI-aware StreamEmitter ────────────────────────────────────────────────
 
-// System prompt is kept stable (no dynamic content) to maximise prompt cache hits.
-// For reasoner (R1) models: system prompt is injected into the first user message
-// because R1 API converts system messages internally anyway.
-// DeepSeek-optimized: explicit tool-calling patterns, structured thinking, and
-// clear formatting rules that work well with DeepSeek's instruction-following style.
-function buildSystemPrompt(guide: string | null, language: 'zh' | 'en'): string {
-  const langInstruction = language === 'zh'
-    ? `## Language
-- The user's system language is Chinese (zh). You MUST respond in Chinese (Simplified Chinese, 简体中文) at all times.
-- All explanations, summaries, and conversation with the user should be in Chinese.
-- Code and technical identifiers (variable names, file paths, commands) remain in their original language.`
-    : `## Language
-- Respond in English only.`;
+class UIStreamEmitter implements StreamEmitter {
+  private md = new MarkdownRenderer();
+  private assistantTextStarted = false;
+  private thinkingStartTime: number | null = null;
+  private reasoningText = '';
+  private outputTokens = 0;
+  private thinkingSpinner = ora({ text: chalk.gray('Thinking...'), color: 'gray', stream: process.stdout });
+  private startTime: number;
+  private iteration: number;
+  private onText?: (text: string) => void;
 
-  const base = `You are CodeGrunt, an expert AI coding assistant running in the terminal. You are powered by DeepSeek, optimized for software engineering tasks.
-
-You have access to tools that let you read files, write files, edit files, run shell commands, list directories, and search code. Use them to complete the user's task.
-
-${langInstruction}
-
-## Core Guidelines
-- Read files before editing them to understand the current content
-- Prefer edit_file over write_file for modifying existing files
-- Run tests after making changes to verify correctness
-- When a task is complete, summarize what you did concisely
-
-## Tool Usage Best Practices
-- Chain tool calls when possible: read search results, then read relevant files, then make edits
-- For search_files: use specific, unique patterns to narrow results
-- For execute_shell: combine commands with && when possible; avoid interactive commands
-- For edit_file: old_string must match exactly including whitespace — copy from read_file output
-- For list_directory: start shallow (depth 1-2) then drill deeper as needed
-- Large tool outputs are truncated — use search or targeted reads when outputs are cut off
-
-## Code Quality
-- Follow existing code conventions in the project
-- Write idiomatic code for the language/framework being used
-- Add minimal, targeted comments for non-obvious logic only
-- Handle errors gracefully in production code
-
-## Anti-Hallucination Rules
-- NEVER invent APIs, functions, types, imports, or dependencies that don't exist in the project. Before using any library or internal API, you MUST read its definition file or find existing usage in the codebase via search_files.
-- When generating new code, you MUST first find and read at least one existing file that demonstrates the pattern, style, and conventions you plan to follow. Copy-adapt is safer than inventing.
-- Every code change must be traceable to something you actually READ during this session — not your training data. If you haven't read a relevant file yet, read it before writing.
-- If you're unsure whether a function/type/import path exists, use search_files or read_file to verify BEFORE writing code that depends on it.
-- For any non-trivial edit, add a brief comment in the code referencing the file(s) that informed your change (e.g., "// Ref: src/utils/billing.ts L23-45" or "// Following pattern from src/cli/commands.ts").`;
-
-  return guide ? base + guide : base;
-}
-
-function buildFirstUserPrefix(cwd: string, model: string, systemPrompt?: string): string {
-  const parts: string[] = [];
-  parts.push(`[cwd: ${cwd}]`);
-
-  // For reasoner models: embed system prompt in the first user message
-  if (isReasonerModel(model) && systemPrompt) {
-    parts.push(`\n[System Instructions]\n${systemPrompt}`);
+  constructor(iteration: number, onText?: (text: string) => void) {
+    this.iteration = iteration;
+    this.startTime = Date.now();
+    this.onText = onText;
   }
 
-  return parts.join('\n') + '\n\n';
+  private updateThinkingText(): void {
+    const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
+    const iterInfo = this.iteration > 0 ? ` . iter ${this.iteration + 1}/${MAX_ITERATIONS}` : '';
+    this.thinkingSpinner.text = chalk.gray(`Thinking... (${elapsed}s . ${this.outputTokens} tokens${iterInfo}  Esc to cancel)`);
+  }
+
+  showThinking(): void {
+    if (!this.thinkingSpinner.isSpinning) {
+      this.thinkingSpinner.start();
+      this.updateThinkingText();
+      const ticker = setInterval(() => {
+        if (this.thinkingSpinner.isSpinning) this.updateThinkingText();
+        else clearInterval(ticker);
+      }, 1000);
+    } else {
+      this.updateThinkingText();
+    }
+  }
+
+  hideThinking(): void {
+    if (this.thinkingSpinner.isSpinning) {
+      this.thinkingSpinner.stop();
+    }
+  }
+
+  onTextDelta(text: string): void {
+    this.hideThinking();
+    if (!this.assistantTextStarted) {
+      printAssistantHeader();
+      this.assistantTextStarted = true;
+    }
+    this.outputTokens += Math.ceil(text.length / 4);
+    this.onText?.(text);
+    const formatted = this.md.feed(text);
+    if (formatted) process.stdout.write(formatted);
+  }
+
+  onReasoningDelta(text: string): void {
+    if (this.thinkingStartTime === null) this.thinkingStartTime = Date.now();
+    this.reasoningText += text;
+    this.outputTokens += Math.ceil(text.length / 4);
+    this.showThinking();
+  }
+
+  onToolCallDelta(_index: number, _id?: string, _name?: string, _argsDelta?: string): void {
+    // Silently accumulated — handled by StreamResponseStage
+  }
+
+  onFinish(_reason: string): void {
+    this.hideThinking();
+    const flushOut = this.md.flush();
+    if (flushOut) process.stdout.write(flushOut);
+
+    if (this.reasoningText && this.thinkingStartTime !== null) {
+      const elapsed = Date.now() - this.thinkingStartTime;
+      printThinkingCollapsed(this.reasoningText, elapsed);
+    }
+  }
 }
+
+// ── Tool call display helper ──────────────────────────────────────────────
+
+function displayToolCalls(
+  pipeCtx: PipelineContext,
+  onToolCall?: (name: string, args: Record<string, unknown>) => void,
+  onToolResult?: (name: string, result: { success: boolean; output: string; error?: string }) => void,
+): void {
+  for (const tc of pipeCtx.toolCalls) {
+    let parsedArgs: Record<string, unknown> = {};
+    try {
+      parsedArgs = JSON.parse(tc.function.arguments) as Record<string, unknown>;
+    } catch { /* ignore */ }
+
+    onToolCall?.(tc.function.name, parsedArgs);
+    printToolCall(tc.function.name, parsedArgs);
+
+    const resultMsg = pipeCtx.messages
+      .filter(m => m.role === 'tool')
+      .find(m => 'tool_call_id' in m && m.tool_call_id === tc.id);
+    if (resultMsg) {
+      const toolResult = {
+        success: !String(resultMsg.content).startsWith('Error:') && !String(resultMsg.content).startsWith('Failed'),
+        output: String(resultMsg.content),
+        error: String(resultMsg.content).startsWith('Error:') || String(resultMsg.content).startsWith('Failed')
+          ? String(resultMsg.content) : undefined,
+      };
+      onToolResult?.(tc.function.name, toolResult);
+      printToolResult(tc.function.name, toolResult);
+    }
+  }
+}
+
+// ── Generator: runs one turn of the existing pipeline ────────────────────
+
+interface GeneratorResult {
+  pipeCtx: PipelineContext;
+  done: boolean;
+  userRejected: boolean;
+  error?: Error;
+  stopReason?: 'stop' | 'length' | 'tool_calls' | 'max_iterations';
+}
+
+async function runGenerator(
+  context: ContextManager,
+  options: AgentRunOptions,
+  lang: 'zh' | 'en',
+  iteration: number,
+  stepDescription?: string,
+): Promise<GeneratorResult> {
+  const { task, cwd, config, provider, onText, signal } = options;
+  const toolDefs = getToolDefinitions();
+  const engine = new PipelineEngine();
+
+  // Build pipeline
+  const builder = new PipelineBuilder()
+    .name(`agent-turn-${iteration}`);
+
+  if (iteration === 0) {
+    builder.addStage(new PrepareContextStage());
+  }
+
+  const emitter = new UIStreamEmitter(iteration, onText);
+  builder.addStage(new StreamResponseStage({ emitter }));
+  builder.addStage(new ProcessToolCallsStage());
+  builder.addStage(new PostProcessStage());
+
+  const pipeline = builder.build();
+
+  // If we have a step description, inject it as context
+  const effectiveTask = stepDescription
+    ? `[Current plan step: ${stepDescription}]\n\n${task}`
+    : task;
+
+  const pipeCtx: PipelineContext = {
+    cwd,
+    config,
+    provider,
+    messages: context.getMessages(),
+    systemPrompt: '',
+    isReasoner: false,
+    task: effectiveTask,
+    toolDefinitions: toolDefs,
+    signal,
+    maxIterations: MAX_ITERATIONS,
+    iteration,
+    reasoningText: '',
+    assistantText: '',
+    toolCalls: [],
+    finishReason: null,
+    outputTokens: 0,
+    hasReadThisTurn: false,
+    warnedBlindWrite: false,
+    language: lang,
+  };
+
+  const result = await engine.execute(pipeline, pipeCtx);
+  context.setMessages(pipeCtx.messages);
+
+  return {
+    pipeCtx,
+    done: result.done,
+    userRejected: result.userRejected,
+    error: result.error,
+    stopReason: pipeCtx.finishReason === 'stop' ? 'stop'
+      : pipeCtx.finishReason === 'length' ? 'length'
+      : pipeCtx.toolCalls.length > 0 ? 'tool_calls'
+      : 'stop',
+  };
+}
+
+// ── Main Agent Loop (P/G/E orchestration) ────────────────────────────────
 
 export async function runAgentLoop(options: AgentRunOptions): Promise<void> {
   const { task, cwd, config, provider, onText, onToolCall, onToolResult, signal } = options;
   const model = config.model;
 
   const context = options.context ?? new ContextManager(CHAT_CONTEXT_BUDGET);
-  const toolDefs = getToolDefinitions();
-
-  const guide = options.systemPromptOverride ? null : await loadProjectGuide(cwd);
   const lang = detectSystemLanguage();
+  const metrics = getDefaultMetrics();
+  const bus = getDefaultEventBus();
+  metrics.increment('agent.turns');
 
-  // When a skill provides a system prompt override, use it instead of the
-  // default coding-assistant identity. This lets skills define completely
-  // different roles (e.g. "You are a BaZi fortune-telling master").
-  const systemPrompt = options.systemPromptOverride
-    ? options.systemPromptOverride
-    : (guide ? buildSystemPrompt(guide, lang) : buildSystemPrompt(null, lang));
+  resetYesAll();
 
-  const isReasoner = isReasonerModel(model);
+  // ══════════════════════════════════════════════════════════════════════
+  // PHASE 0: INTENTOR — classify coding vs non-coding
+  // ══════════════════════════════════════════════════════════════════════
 
-  // Only push system prompt once per session (keeps it stable for cache hits).
-  // Reasoner models skip system role — prompt goes into first user message.
-  if (context.getMessages().length === 0) {
-    if (!isReasoner) {
-      context.push({ role: 'system', content: systemPrompt });
-    }
+  log.info('Phase 0: Intentor — classifying intent');
+
+  let intent: IntentResult;
+  try {
+    intent = await detectIntent(provider, model, task, lang, signal);
+  } catch {
+    intent = { isCoding: true, confidence: 50, reason: 'classification error', needsFullPlan: true };
   }
 
-  // Reset per-turn state
-  resetYesAll();
-  let hasReadThisTurn = false;
+  printIntentResult(intent);
+  log.info('Intent classified', { isCoding: intent.isCoding, confidence: intent.confidence });
 
-  // Warned-this-turn flag: only inject the anti-hallucination reminder once per
-  // turn to avoid spamming context with repeated warnings.
-  let warnedBlindWrite = false;
+  if (intent.isCoding) {
+    await runCodingFlow(options, context, lang, intent, metrics, bus);
+  } else {
+    await runChatFlow(options, context, lang, metrics);
+  }
+}
 
-  // Prepend cwd (and system prompt for reasoner) to the first message of each turn
-  const isFirstTurn = context.getMessages().length <= (isReasoner ? 0 : 1);
-  const userContent = isFirstTurn
-    ? buildFirstUserPrefix(cwd, model, isReasoner ? systemPrompt : undefined) + task
-    : task;
+// ── Coding flow: Planner → Generator → Evaluator ─────────────────────────
 
-  context.push({ role: 'user', content: userContent });
+async function runCodingFlow(
+  options: AgentRunOptions,
+  context: ContextManager,
+  lang: 'zh' | 'en',
+  _intent: IntentResult,
+  metrics: ReturnType<typeof getDefaultMetrics>,
+  _bus: ReturnType<typeof getDefaultEventBus>,
+): Promise<void> {
+  const { task, provider, onText, onToolCall, onToolResult, signal } = options;
+  const model = options.config.model;
 
-  for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+  // ══════════════════════════════════════════════════════════════════════
+  // PHASE 1: PLANNER
+  // ══════════════════════════════════════════════════════════════════════
+
+  log.info('Phase 1: Planner — analyzing task');
+  const planSpinner = ora({ text: chalk.gray('Planning...'), color: 'gray', stream: process.stdout }).start();
+
+  let plan: TaskPlan;
+  try {
+    plan = await generatePlan(provider, model, task, lang, signal);
+    planSpinner.stop();
+  } catch (err) {
+    planSpinner.stop();
+    log.warn('Planner failed, falling back to single-step execution', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    plan = {
+      goal: task.slice(0, 100),
+      reasoning: 'Planner error — executing as single step.',
+      steps: [{
+        id: 1,
+        description: task,
+        toolsHint: [],
+        expectedOutcome: 'Task completed',
+        verification: 'No errors',
+      }],
+    };
+  }
+
+  printPlanHeader(plan);
+
+  // ══════════════════════════════════════════════════════════════════════
+  // PHASE 2: Step-by-step GENERATOR + EVALUATOR
+  // ══════════════════════════════════════════════════════════════════════
+
+  let finalAssistantText = '';
+  let userRejected = false;
+
+  for (let stepIdx = 0; stepIdx < plan.steps.length; stepIdx++) {
     if (signal?.aborted) break;
 
-    let assistantText = '';
-    let reasoningText = '';
-    const toolCallAccumulator = new Map<number, { id: string; name: string; arguments: string }>();
-    let finishReason: string | null = null;
-    let outputTokens = 0;
-    let thinkingStartTime: number | null = null;
+    const step = plan.steps[stepIdx];
+    printStepProgress(stepIdx, plan.steps.length, step.description);
 
-    // Animated spinner: "⠋ Thinking… (3s · ↑ 42 tokens · iter 2/30)"
-    const startTime = Date.now();
-    const thinkingSpinner = ora({
-      text: chalk.gray('Thinking…'),
-      color: 'gray',
-      stream: process.stdout,
-    });
+    let stepPassed = false;
+    let lastEval: EvaluationResult | null = null;
 
-    const updateThinkingText = (): void => {
-      const elapsed = Math.floor((Date.now() - startTime) / 1000);
-      const iterInfo = iteration > 0 ? ` · iter ${iteration + 1}/${MAX_ITERATIONS}` : '';
-      thinkingSpinner.text = chalk.gray(`Thinking… (${elapsed}s · ↑ ${outputTokens} tokens${iterInfo}  Esc to cancel)`);
-    };
-
-    const showThinking = (): void => {
-      if (!thinkingSpinner.isSpinning) {
-        thinkingSpinner.start();
-        updateThinkingText();
-        // Tick every second so the elapsed time updates even between chunks
-        const ticker = setInterval(() => {
-          if (thinkingSpinner.isSpinning) updateThinkingText();
-          else clearInterval(ticker);
-        }, 1000);
-      } else {
-        updateThinkingText();
-      }
-    };
-
-    const hideThinking = (): void => {
-      if (thinkingSpinner.isSpinning) {
-        thinkingSpinner.stop();
-      }
-    };
-
-    const stream = provider.stream(context.getMessages(), {
-      model: config.model,
-      maxTokens: config.maxTokens,
-      // Reasoner models do not support temperature — omit it
-      temperature: isReasoner ? undefined : config.temperature,
-      reasoningEffort: isReasoner ? config.reasoningEffort : undefined,
-      topP: config.topP,
-      frequencyPenalty: config.frequencyPenalty,
-      presencePenalty: config.presencePenalty,
-      tools: toolDefs,
-      signal,
-    });
-
-    const md = new MarkdownRenderer();
-
-    // Start spinner immediately so user sees instant feedback while waiting
-    // for the first streaming chunk (important for reasoner models which may
-    // take 30-60 seconds to emit their first reasoning delta).
-    showThinking();
-
-    try {
-      for await (const chunk of stream) {
-        if (signal?.aborted) break;
-
-        if (chunk.type === 'text_delta') {
-          hideThinking();
-          if (!assistantText) {
-            // Print assistant header before first text chunk
-            printAssistantHeader();
-          }
-          assistantText += chunk.text;
-          outputTokens += Math.ceil(chunk.text.length / 4);
-          onText?.(chunk.text);
-          const formatted = md.feed(chunk.text);
-          if (formatted) process.stdout.write(formatted);
-        } else if (chunk.type === 'reasoning_delta') {
-          if (thinkingStartTime === null) thinkingStartTime = Date.now();
-          reasoningText += chunk.text;
-          outputTokens += Math.ceil(chunk.text.length / 4);
-          showThinking();
-        } else if (chunk.type === 'tool_call_delta') {
-          const existing = toolCallAccumulator.get(chunk.index) ?? { id: '', name: '', arguments: '' };
-          if (chunk.id) existing.id = chunk.id;
-          if (chunk.name) existing.name = chunk.name;
-          existing.arguments += chunk.arguments_delta;
-          toolCallAccumulator.set(chunk.index, existing);
-        } else if (chunk.type === 'finish') {
-          hideThinking();
-          finishReason = chunk.finish_reason;
-        }
-      }
-
+    for (let refineCount = 0; refineCount <= MAX_REFINE_RETRIES; refineCount++) {
       if (signal?.aborted) break;
-    } finally {
-      // Always stop the spinner, even on abort/error.
-      // Without this, the ora timer keeps writing to stdout and corrupts
-      // subsequent terminal output (e.g. the next readMultilineInput panel).
-      hideThinking();
-    }
 
-    // Flush any remaining markdown buffer
-    const flushOut = md.flush();
-    if (flushOut) process.stdout.write(flushOut);
+      const stepTask = refineCount === 0
+        ? `[Step ${step.id}/${plan.steps.length}: ${step.description}]\nExpected: ${step.expectedOutcome}`
+        : `[RETRY Step ${step.id}: ${step.description}]\nPrevious issues:\n${(lastEval?.issues ?? []).map(i => `- ${i}`).join('\n')}\n\nSuggestions:\n${(lastEval?.suggestions ?? []).map(s => `- ${s}`).join('\n')}\n\nPlease fix the issues and re-execute this step.`;
 
-    // Show collapsed reasoning block after stream completes
-    if (reasoningText && thinkingStartTime !== null) {
-      const elapsed = Date.now() - thinkingStartTime;
-      printThinkingCollapsed(reasoningText, elapsed);
-    }
+      const genResult = await runGenerator(
+        context,
+        { ...options, task: stepTask },
+        lang,
+        stepIdx * (MAX_REFINE_RETRIES + 1) + refineCount,
+        step.description,
+      );
 
-    // Warn if response was truncated due to token limit (especially common with
-    // reasoner models whose chain-of-thought consumes most of maxTokens budget).
-    if (finishReason === 'length') {
-      process.stdout.write('\n');
-      if (lang === 'zh') {
-        process.stdout.write(chalk.yellow('⚠ 响应被截断（已达 token 上限）。请用 /config maxtokens <数值> 调高上限后重试（建议 32768 或更高）。\n'));
+      if (genResult.userRejected) { userRejected = true; break; }
+      if (genResult.error) { log.error('Generator error', { error: genResult.error.message }); throw genResult.error; }
+
+      displayToolCalls(genResult.pipeCtx, onToolCall, onToolResult);
+
+      // Extract current-turn tool calls and results for the evaluator
+      const currentTurnToolCalls = genResult.pipeCtx.toolCalls.map(tc => ({
+        name: tc.function.name,
+        args: tc.function.arguments,
+      }));
+      const currentTurnToolResults = genResult.pipeCtx.messages
+        .filter(m => m.role === 'tool' && 'tool_call_id' in m)
+        .map(m => ({ content: String(m.content) }));
+
+      const evaluation = await evaluateStep(provider, model, {
+        planStep: step,
+        messages: genResult.pipeCtx.messages,
+        assistantText: genResult.pipeCtx.assistantText,
+        hasReadThisTurn: genResult.pipeCtx.hasReadThisTurn,
+        currentTurnToolCalls,
+        currentTurnToolResults,
+        language: lang,
+        signal,
+      });
+
+      lastEval = evaluation;
+      printEvaluation(evaluation, lang);
+
+      if (evaluation.passed) {
+        stepPassed = true;
+        finalAssistantText = genResult.pipeCtx.assistantText;
+        break;
+      }
+
+      if (refineCount < MAX_REFINE_RETRIES) {
+        printRefineIndicator(refineCount + 1, MAX_REFINE_RETRIES, lang);
+        const refineMsg = lang === 'zh'
+          ? `[评估反馈] 上一步执行未通过质量检查。\n问题：\n${evaluation.issues.map(i => `- ${i}`).join('\n')}\n\n建议：\n${evaluation.suggestions.map(s => `- ${s}`).join('\n')}\n\n请修正上述问题并重新执行。`
+          : `[Evaluation Feedback] Previous step did not pass quality check.\nIssues:\n${evaluation.issues.map(i => `- ${i}`).join('\n')}\n\nSuggestions:\n${evaluation.suggestions.map(s => `- ${s}`).join('\n')}\n\nPlease fix the issues and re-execute.`;
+        context.push({ role: 'user', content: refineMsg });
+        log.info('Refining step', { stepId: step.id, retry: refineCount + 1 });
       } else {
-        process.stdout.write(chalk.yellow('⚠ Response truncated (token limit reached). Increase with /config maxtokens <value> (try 32768 or higher).\n'));
+        log.warn('Max retries exhausted for step', { stepId: step.id });
+        process.stdout.write(chalk.yellow(`  ! step ${step.id} max retries, continuing\n`));
+        stepPassed = true;
+        finalAssistantText = genResult.pipeCtx.assistantText;
       }
     }
 
-    if (finishReason === 'stop' || (finishReason === 'length' && toolCallAccumulator.size === 0)) {
-      if (assistantText) {
-        context.push({
-          role: 'assistant',
-          content: assistantText,
-          ...(reasoningText ? { reasoning_content: reasoningText } : {}),
-        });
-        process.stdout.write('\n');
-      }
-      break;
-    }
-
-    if (finishReason === 'tool_calls') {
-      if (assistantText) process.stdout.write('\n');
-
-      const toolCalls: ToolCall[] = Array.from(toolCallAccumulator.entries())
-        .sort(([a], [b]) => a - b)
-        .map(([, tc]) => ({
-          id: tc.id,
-          type: 'function' as const,
-          function: { name: tc.name, arguments: tc.arguments },
-        }));
-
-      context.push({
-        role: 'assistant',
-        content: null,
-        tool_calls: toolCalls,
-        ...(reasoningText ? { reasoning_content: reasoningText } : {}),
-      } as ToolCallMessage);
-
-      // ── Anti-hallucination: detect "blind write" pattern ─────────────────
-      // If the model issues write/edit without any read/search/list in the
-      // same batch and hasn't read anything this turn, inject a one-time
-      // reminder after tool results complete. Must NOT go between
-      // assistant(tool_calls) and tool messages — the API forbids that.
-      const hasWriteInBatch = toolCalls.some(tc => WRITE_TOOL_NAMES.has(tc.function.name));
-      const hasReadInBatch = toolCalls.some(tc => READ_TOOL_NAMES.has(tc.function.name));
-      const shouldWarnBlindWrite = hasWriteInBatch && !hasReadInBatch && !hasReadThisTurn && !warnedBlindWrite;
-
-      for (const tc of toolCalls) {
-        let parsedArgs: Record<string, unknown> = {};
-        try {
-          parsedArgs = JSON.parse(tc.function.arguments) as Record<string, unknown>;
-        } catch {
-          // leave empty
-        }
-
-        // Track reads so subsequent writes in the same turn are considered grounded
-        if (READ_TOOL_NAMES.has(tc.function.name)) {
-          hasReadThisTurn = true;
-        }
-
-        onToolCall?.(tc.function.name, parsedArgs);
-        printToolCall(tc.function.name, parsedArgs);
-
-        const toolSpinner = ora({
-          text: chalk.gray(`Running ${tc.function.name}…`),
-          color: 'cyan',
-          stream: process.stdout,
-        }).start();
-
-        // Stop spinner before executing so confirmation UIs (edit_file, write_file)
-        // can take over stdout/raw-mode without the spinner corrupting their output.
-        toolSpinner.stop();
-
-        const result = await executeTool(tc.function.name, tc.function.arguments, cwd);
-
-        onToolResult?.(tc.function.name, result);
-        printToolResult(tc.function.name, result);
-
-        context.push({
-          role: 'tool',
-          tool_call_id: tc.id,
-          content: result.success ? result.output : (result.error ?? result.output),
-        });
-
-        if (result.userRejected) {
-          return;
-        }
-      }
-
-      // Inject blind-write warning after all tool results so the model
-      // sees it on the next reasoning iteration. Placed here (not between
-      // assistant(tool_calls) and tool messages) to satisfy API constraints.
-      if (shouldWarnBlindWrite) {
-        warnedBlindWrite = true;
-        const warning = lang === 'zh'
-          ? '⚠️ 检测到直接写入操作：你尚未读取任何项目文件就尝试编辑代码。这极大增加了凭空编造不存在的 API/类型/模式的风险。建议在写入之前先用 read_file 或 search_files 了解现有代码风格和可用的接口。'
-          : '⚠️ Blind write detected: you are attempting to edit code without having read any project files first. This greatly increases the risk of inventing non-existent APIs, types, or patterns. Consider using read_file or search_files to ground yourself before writing.';
-        context.push({ role: 'user', content: warning });
-      }
-
-      // continue loop — model will process tool results
-    } else {
-      // length or unknown finish reason — stop
-      if (assistantText) process.stdout.write('\n');
-      break;
-    }
+    if (userRejected) break;
+    if (!stepPassed) log.error('Step failed after all retries', { stepId: step.id });
   }
+
+  if (userRejected) { log.info('Agent ended — user rejected'); return; }
+
+  if (finalAssistantText) {
+    process.stdout.write('\n');
+  } else {
+    const summaryMsg = lang === 'zh'
+      ? '所有步骤已执行完成。请查看上述工具输出确认结果。'
+      : 'All steps executed. Review the tool outputs above for results.';
+    process.stdout.write(chalk.green('\n' + summaryMsg + '\n'));
+  }
+
+  log.info('Coding flow complete', { planSteps: plan.steps.length });
+  metrics.increment('agent.coding_turns');
+}
+
+// ── Chat flow: (optional lightweight plan) → Generator only ──────────────
+
+async function runChatFlow(
+  options: AgentRunOptions,
+  context: ContextManager,
+  lang: 'zh' | 'en',
+  metrics: ReturnType<typeof getDefaultMetrics>,
+): Promise<void> {
+  const { task, onToolCall, onToolResult, signal } = options;
+
+  log.info('Phase 1 (chat): direct generation — no Evaluator');
+
+  const genResult = await runGenerator(context, options, lang, 0);
+
+  if (genResult.userRejected) { log.info('Chat flow ended — user rejected'); return; }
+  if (genResult.error) throw genResult.error;
+
+  displayToolCalls(genResult.pipeCtx, onToolCall, onToolResult);
+
+  // If the model made tool calls (e.g. read_file for context), continue
+  // iterating until it stops — same as the old single-step loop.
+  let iteration = 1;
+  let current = genResult;
+  while (!current.done && current.pipeCtx.toolCalls.length > 0 && iteration < MAX_ITERATIONS) {
+    if (signal?.aborted) break;
+    current = await runGenerator(context, options, lang, iteration);
+    if (current.userRejected) break;
+    if (current.error) throw current.error;
+    displayToolCalls(current.pipeCtx, onToolCall, onToolResult);
+    iteration++;
+  }
+
+  log.info('Chat flow complete', { iterations: iteration });
+  metrics.increment('agent.chat_turns');
 }
