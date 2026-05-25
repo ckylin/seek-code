@@ -47,8 +47,12 @@ export class ProcessToolCallsStage implements Stage {
       let parsedArgs: Record<string, unknown> = {};
       try {
         parsedArgs = JSON.parse(tc.function.arguments) as Record<string, unknown>;
-      } catch {
-        // leave empty — executor will report the error
+      } catch (e) {
+        log.warn('Failed to parse tool call arguments', {
+          tool: tc.function.name,
+          raw: tc.function.arguments.slice(0, 200),
+          error: String(e),
+        });
       }
 
       // Track reads for blind-write detection

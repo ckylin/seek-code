@@ -25,6 +25,7 @@ export class PipelineEngine {
 
     const overallTimer = metrics.startTimer('pipeline.duration');
     let userRejected = false;
+    let pipelineError: Error | null = null;
 
     try {
       for (const stage of pipeline.stages) {
@@ -74,11 +75,8 @@ export class PipelineEngine {
             timestamp: Date.now(),
           } as StageFinishedEvent);
 
-          return {
-            done: true,
-            userRejected: false,
-            error: err instanceof Error ? err : new Error(String(err)),
-          };
+          pipelineError = err instanceof Error ? err : new Error(String(err));
+          break;
         }
 
         const durationMs = Date.now() - stageStart;
@@ -112,11 +110,14 @@ export class PipelineEngine {
         type: 'pipeline:finished',
         pipelineName: pipeline.name,
         durationMs,
-        success: !userRejected,
+        success: !userRejected && !pipelineError,
         timestamp: Date.now(),
       });
     }
 
+    if (pipelineError) {
+      return { done: true, userRejected: false, error: pipelineError };
+    }
     return { done: true, userRejected };
   }
 }
