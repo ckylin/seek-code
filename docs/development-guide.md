@@ -580,7 +580,6 @@ CodeGrunt 在交互式 REPL 中提供了一组斜杠命令，实现在 `src/cli/
 | `/config` | 显示或更改配置设置 |
 | `/reasoning` / `/effort` | 设置 R1 模型的推理强度（low/medium/high） |
 | `/skills` | 列出和管理技能（创建、列表） |
-| `/exit` | 退出 REPL |
 
 ---
 

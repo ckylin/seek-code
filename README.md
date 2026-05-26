@@ -129,7 +129,6 @@ codegrunt "你的任务描述"
 | `/config` | 显示或修改配置设置 |
 | `/reasoning` / `/effort` | 设置 R1 模型的推理强度（low/medium/high） |
 | `/skills` | 列出和管理技能（创建、列表） |
-| `/exit` | 退出 CodeGrunt |
 
 ### @-引用
 

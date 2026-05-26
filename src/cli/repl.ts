@@ -49,7 +49,8 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
   let lastCancelledAt = 0;
 
   // ── Main REPL loop (iterative, not recursive — avoids stack growth) ──
-  while (true) {    const showMeta = lastCancelledAt === 0;
+  while (true) {
+    const showMeta = lastCancelledAt === 0;
     const result = await readMultilineInput(cwd, config.model, skills, undefined, showMeta);
 
     if (result.cancelled) {
@@ -79,14 +80,6 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
     // Slash commands — only if "/" is immediately followed by a letter (no space)
     if (raw.startsWith('/') && raw.length > 1 && raw[1] !== ' ') {
       const cmd = await handleSlashCommand(raw, cwd, config, provider, context, skills);
-
-      if (cmd.type === 'exit') {
-        console.log(chalk.gray('Goodbye.'));
-        if (process.env.CODEGRUNT_TELEMETRY === '1') {
-          metrics.printSummary();
-        }
-        process.exit(0);
-      }
 
       if (cmd.type === 'model_changed' || cmd.type === 'config_changed') {
         config = cmd.config;

@@ -16,7 +16,6 @@ export const SLASH_COMMANDS = [
   { name: '/clear',   desc: 'Clear conversation context' },
   { name: '/balance', desc: 'Show account balance & usage' },
   { name: '/cost',    desc: 'Show session token usage and cost' },
-  { name: '/exit',    desc: 'Exit CodeGrunt (or exit current skill)' },
   { name: '/help',    desc: 'Show help' },
 ];
 

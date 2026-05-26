@@ -29,7 +29,7 @@ export const BUILTIN_COMMANDS: CommandDescriptor[] = [
   { name: 'cost',    desc: 'Show session token usage and cost' },
   { name: 'balance', desc: 'Show account balance & usage' },
   { name: 'help',    desc: 'Show full help message' },
-  { name: 'exit',    desc: 'Exit CodeGrunt' },
+
 ];
 
 export type SlashCommandResult =
@@ -37,7 +37,6 @@ export type SlashCommandResult =
   | { type: 'clear' }
   | { type: 'config_changed'; config: CodeGruntConfig }
   | { type: 'model_changed'; config: CodeGruntConfig }
-  | { type: 'exit' }
   | { type: 'skills_reload' }
   | { type: 'not_a_command' };
 
@@ -94,8 +93,6 @@ export async function handleSlashCommand(
       await printBalanceAndUsage(config.apiKey, config.baseURL, config.model);
       return { type: 'handled' };
 
-    case 'exit':
-      return { type: 'exit' };
 
     case 'skills':
       return await handleSkills(rest, skills);
@@ -142,7 +139,6 @@ ${chalk.bold('Slash Commands')}
   ${chalk.cyan('/help')}              Show this help message
   ${chalk.cyan('/clear')}             Clear conversation context
   ${chalk.cyan('/compact')}           Summarize and compress conversation history to save tokens
-  ${chalk.cyan('/exit')}              Exit CodeGrunt
 ${skillsSection}
 ${chalk.bold('@ References')}
 

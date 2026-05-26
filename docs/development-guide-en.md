@@ -551,7 +551,6 @@ CodeGrunt provides a set of slash commands available in the interactive REPL, im
 | `/config` | Show or change configuration settings |
 | `/reasoning` / `/effort` | Set reasoning effort for R1 models (low/medium/high) |
 | `/skills` | List and manage skills (create, list) |
-| `/exit` | Exit CodeGrunt |
 
 ---
 
