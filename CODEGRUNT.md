@@ -62,7 +62,7 @@ index.ts  →  Commander.js program
 
 **`at-resolver.ts`** — Parses `@file.ts`, `@src/`, `@https://...` tokens from user input. Resolves them to content (reads files, lists directories up to 20 entries, fetches URLs) and appends formatted attachments to the message body. Directory scanning skips `node_modules`, `.git`, `dist`, `.next`, `__pycache__`, `.cache`.
 
-**`commands.ts`** — Slash command handler. Returns discriminated unions: `handled`, `clear`, `config_changed`, `model_changed`, `skill_run`, `exit`, `skills_reload`, or `not_a_command`. Commands include `/init`, `/model`, `/compact`, `/clear`, `/config`, `/cost`, `/balance`, `/token`, `/reasoning`, `/effort`, `/review`, `/skills`, `/exit`, and skill execution via `/skill-name`.
+**`commands.ts`** — Slash command handler. Returns discriminated unions: `handled`, `clear`, `config_changed`, `model_changed`, `skill_run`, `exit`, `skills_reload`, or `not_a_command`. Commands include `/init`, `/model`, `/compact`, `/clear`, `/config`, `/cost`, `/balance`, `/reasoning`, `/effort`, `/review`, `/skills`, `/exit`, and skill execution via `/skill-name`.
 
 **`skills.ts`** — Loads user-defined skills from `~/.codegrunt/skills/` (global) and `.codegrunt/skills/` (project-local). Each skill is a `.md` file or a directory with `skill.md` containing frontmatter (`name`, `description`, `system`) and a prompt template body. Supports installing skills from `.zip` files. Skills appear in tab completion, the `/help` menu, and are auto-discovered by the Intentor.
 

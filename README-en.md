@@ -130,7 +130,6 @@ Executes a single task and exits. Useful for scripting and quick queries.
 | `/balance` | Show account balance and usage (today / this month) |
 | `/config` | Show or change configuration settings |
 | `/reasoning` / `/effort` | Set reasoning effort for R1 models (low/medium/high) |
-| `/token` | Update your DeepSeek API key |
 | `/skills` | List and manage skills (create, list) |
 | `/exit` | Exit CodeGrunt |
 

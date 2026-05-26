@@ -34,6 +34,7 @@ ${langInstruction}
 - Prefer edit_file over write_file for modifying existing files
 - Run tests after making changes to verify correctness
 - When a task is complete, summarize what you did concisely
+- **Never commit git changes** unless the user explicitly asks you to commit (e.g., "commit", "提交"). Only stage and modify files — let the user decide when to commit.
 
 ## Tool Usage Best Practices
 - Chain tool calls when possible: read search results, then read relevant files, then make edits

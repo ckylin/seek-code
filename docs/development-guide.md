@@ -579,7 +579,6 @@ CodeGrunt 在交互式 REPL 中提供了一组斜杠命令，实现在 `src/cli/
 | `/balance` | 显示账户余额和用量（今日 / 本月） |
 | `/config` | 显示或更改配置设置 |
 | `/reasoning` / `/effort` | 设置 R1 模型的推理强度（low/medium/high） |
-| `/token` | 更新你的 DeepSeek API 密钥 |
 | `/skills` | 列出和管理技能（创建、列表） |
 | `/exit` | 退出 REPL |
 

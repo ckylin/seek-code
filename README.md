@@ -128,7 +128,6 @@ codegrunt "你的任务描述"
 | `/balance` | 显示账户余额和用量（今日 / 本月） |
 | `/config` | 显示或修改配置设置 |
 | `/reasoning` / `/effort` | 设置 R1 模型的推理强度（low/medium/high） |
-| `/token` | 更新 DeepSeek API 密钥 |
 | `/skills` | 列出和管理技能（创建、列表） |
 | `/exit` | 退出 CodeGrunt |
 
