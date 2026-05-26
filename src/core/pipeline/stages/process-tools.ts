@@ -1,4 +1,4 @@
-// ── Stage 3: Process Tool Calls ─────────────────────────────────────────────
+﻿// ── Stage 3: Process Tool Calls ─────────────────────────────────────────────
 // Executes tool calls returned by the model, handles confirm flow for
 // destructive operations, tracks read/write patterns for anti-hallucination.
 //
@@ -9,7 +9,7 @@ import type { Stage, StageResult, PipelineContext } from '../types.js';
 import type { ToolCallMessage } from '../../../types.js';
 import { READ_TOOL_NAMES, WRITE_TOOL_NAMES } from '../types.js';
 import { getToolByName } from '../../tools/registry.js';
-import { resetYesAll, executeToolCall } from './process-tools-helpers.js';
+import { executeToolCall } from './process-tools-helpers.js';
 import { getLogger } from '../../observability/logger.js';
 import { getDefaultEventBus, type ToolCallEvent, type ToolResultEvent } from '../../events/bus.js';
 import { getDefaultMetrics } from '../../observability/metrics.js';
@@ -23,9 +23,6 @@ export class ProcessToolCallsStage implements Stage {
     if (ctx.finishReason !== 'tool_calls' || ctx.toolCalls.length === 0) {
       return { continue: true, done: false };
     }
-
-    // Reset per-turn "yes for all" state only when we are actually about to run tools
-    resetYesAll();
 
     const bus = getDefaultEventBus();
     const metrics = getDefaultMetrics();
