@@ -27,7 +27,8 @@ npm link
 
 **Engine requirement**: Node.js >= 18.  
 **Module system**: ESM (`"type": "module"`).  
-**Compiler target**: ES2022, bundled module resolution via `tsx` (dev) / `tsc` (build).
+**Compiler target**: ES2022, JSX support (`react-jsx` via `ink`).  
+**Module resolution**: `bundler` — works with `tsx` (dev) / `tsc` (build).
 
 ---
 
@@ -43,7 +44,15 @@ index.ts  →  Commander.js program
   └─ "skills" subcommand  →  install / remove / list skills
 ```
 
-`index.ts` is the binary entry. It loads config, initializes the DeepSeek provider, and branches into REPL, one-shot, update check, or skill management. One-shot uses a different context budget (`CONTEXT_BUDGET` for reasoner models vs `CHAT_CONTEXT_BUDGET` for chat models).
+`index.ts` is the binary entry. It loads config, generates a `runId` for trace correlation, initializes the DeepSeek provider, creates a logger via `createLogger('cli', runId)`, and branches into REPL, one-shot, update check, or skill management.
+
+**Ink/React Terminal UI** (`ink/`) — Modern React-based terminal components using the `ink` library:
+- `PromptInput.tsx` — Main input with cursor movement, history navigation, autocomplete dropdown, Ctrl+C cancel, and Ink `useInput` key bindings
+- `Dropdown.tsx` — Autocomplete overlay with `❯` indicator, skill/builtin/file kind coloring, 8-item limit
+- `ListPicker.tsx` — Arrow-key selector for model/config selection
+- `useAutocomplete.ts` — File path completion (`@` references), slash command completion, skill name completion
+- `useHistory.ts` — Persistent command history with up/down navigation
+- `types.ts` — Shared Ink component types (`InputResult`, `DropdownItem`, `PromptInputProps`, etc.)
 
 **REPL** (`repl.ts`, `input.ts`) uses Node.js `readline` with:
 - Tab completion for file paths and slash commands
@@ -55,7 +64,7 @@ index.ts  →  Commander.js program
 
 **`commands.ts`** — Slash command handler. Returns discriminated unions: `handled`, `clear`, `config_changed`, `model_changed`, `skill_run`, `exit`, `skills_reload`, or `not_a_command`. Commands include `/init`, `/model`, `/compact`, `/clear`, `/config`, `/cost`, `/balance`, `/token`, `/reasoning`, `/effort`, `/review`, `/skills`, `/exit`, and skill execution via `/skill-name`.
 
-**`skills.ts`** — Loads user-defined skills from `~/.codegrunt/skills/` (global) and `.codegrunt/skills/` (project-local). Each skill is a `.md` file or a directory with `skill.md` containing frontmatter (`name`, `description`, `system`) and a prompt template body. Supports installing skills from `.zip` files. Skills appear in tab completion and the `/help` menu.
+**`skills.ts`** — Loads user-defined skills from `~/.codegrunt/skills/` (global) and `.codegrunt/skills/` (project-local). Each skill is a `.md` file or a directory with `skill.md` containing frontmatter (`name`, `description`, `system`) and a prompt template body. Supports installing skills from `.zip` files. Skills appear in tab completion, the `/help` menu, and are auto-discovered by the Intentor.
 
 **`setup.ts`** — Interactive first-run wizard: collects API key, model selection (lists DeepSeek models), token limit, reasoning effort. Writes to `~/.codegrunt/config.json`.
 
@@ -63,15 +72,36 @@ index.ts  →  Commander.js program
 
 ### Agent Loop (`src/core/agent/loop.ts`)
 
-Implements a **ReAct (Reasoning + Acting)** loop:
+Implements a **P/G/E (Planner / Generator / Evaluator) + Intentor** architecture powered by a Harness-style pipeline engine:
 
-1. Send system prompt + conversation history + user task to the LLM
-2. Stream response, detecting tool calls (function calling via OpenAI-compatible API)
-3. Execute tool via the ToolExecutor
-4. Append tool result as a message, loop back to step 1
-5. Stop when the model emits a final text response (no tool call)
+**Phase 0 — Intentor** (`intentor.ts`): Classifies user intent into three paths:
+- **Skill match** → `runSkillFlow`: Applies skill system prompt + content, then chat-style generation
+- **Coding** → `runCodingFlow`: P/G/E pipeline with plan → step-by-step → evaluate → refine
+- **Chat** → `runChatFlow`: Direct generator pipeline, skipping Planner/Evaluator
+
+Intentor uses fast heuristics first (keyword patterns, continuation detection, skill keyword overlap) with LLM fallback only when confidence is low.
+
+**Coding Flow — P/G/E**:
+1. **Planner** (`planner.ts`): Decomposes complex tasks into 2-5 steps with low-temperature JSON output. Skipped for short tasks (≤50 chars) and continuation signals
+2. **Generator**: Pipeline engine executes each step sequentially — now with **inner iteration** (multi-turn tool calls per step, not just 1 turn)
+3. **Evaluator** (`evaluator.ts`): Quality check / plan adherence / hallucination detection. Fails → injects feedback and retries (max 3, up from 2). `pruneRefineMessages()` cleans eval feedback between steps
+4. `sessionHasRead` tracking prevents redundant file reads across turns
+
+**Chat Flow**: Skips Planner/Evaluator, uses Generator pipeline iteratively (up to 30 iterations). Prints fallback text if model returns empty.
 
 Tracks session token usage (`addUsage`, `getSessionUsage`, `resetSessionUsage`) for `/cost` reporting.
+
+### Pipeline Engine (`src/core/pipeline/`)
+
+Inspired by Harness CI/CD pipelines. Each agent interaction is decomposed into 5 stages sharing a `PipelineContext`:
+
+| Stage | File | Responsibility |
+|---|---|---|
+| PrepareContext | `prepare-context.ts` | Build system prompt, inject project guide, init messages |
+| StreamResponse | `stream-response.ts` | Stream LLM call, accumulate text/reasoning/tool calls |
+| ProcessToolCalls | `process-tools.ts` | Parse tool calls, execute via executor, inject results |
+| ProcessToolHelpers | `process-tools-helpers.ts` | yes-for-all session-level state management |
+| PostProcess | `post-process.ts` | Blind-write warnings, token stats, final output formatting |
 
 ### Context Manager (`src/core/context/manager.ts`)
 
@@ -83,7 +113,8 @@ Manages conversation message array with a **token budget**. When the budget is e
 
 ### Tool System (`src/core/tools/`)
 
-Six built-in tools:
+Six built-in tools with plugin-style `ToolRegistry` (supports runtime add/remove):
+
 | Tool | File | Destructive? |
 |---|---|---|
 | `read_file` | `read_file.ts` | No |
@@ -113,17 +144,40 @@ interface LLMProvider {
 - Reasoning content extraction (for reasoner models)
 - Token usage tracking per request
 
+### Observability (`src/core/observability/`)
+
+**Logger v2** (`logger.ts`):
+- **File transport**: Structured JSONL logs written to `~/.codegrunt/logs/`
+- **Trace IDs**: Unique `runId` for correlating entries across a single session. Created via `createLogger('namespace', runId)`
+- **Log rotation**: Keeps last 5 files, max 5 MB each
+- **Environment**: `CODEGRUNT_LOG_LEVEL` (debug/info/warn/error), `CODEGRUNT_LOG_FILE` (0/false to disable), `CODEGRUNT_VERBOSE`
+
+**Metrics** (`metrics.ts`): Lightweight counters, timers, and snapshots for telemetry.
+
+**EventBus** (`src/core/events/bus.ts`): Typed event bus covering pipeline/tool/LLM/conversation lifecycle events.
+
+**DI Container** (`src/core/di/container.ts`): Service container with singleton and transient lifecycles.
+
 ### Utilities (`src/utils/`)
 
 - **`billing.ts`** — Fetches account balance/usage from DeepSeek API, formats cost display with USD/CNY dual currency
 - **`confirm.ts`** — Interactive yes/no prompt for destructive operations with diff preview
-- **`display.ts`** — Markdown rendering in terminal, error formatting, diff display
+- **`display.ts`** — Markdown rendering in terminal, error formatting, diff display, plan/step/evaluation output
 - **`interrupt.ts`** — Creates `AbortController` for Ctrl+C handling in both REPL and one-shot modes
-- **`markdown.ts`** — Strips or renders Markdown in terminal output
+- **`markdown.ts`** — Streaming Markdown-to-terminal renderer
+- **`select.ts`** — Interactive list selector with arrow-key navigation
+- **`constants.ts`** — Shared constants (accent color, etc.)
 
 ---
 
 ## Key Patterns & Conventions
+
+### P/G/E + Intentor Architecture
+
+The agent loop now has **four distinct execution paths**:
+- `runSkillFlow` — for skill-matched tasks (applies skill system prompt)
+- `runCodingFlow` — for coding tasks (Planner → Generator → Evaluator with inner iteration)
+- `runChatFlow` — for chat tasks (Generator only, no evaluation)
 
 ### Discriminated Union Returns
 
@@ -141,9 +195,16 @@ type SlashCommandResult =
 ```
 This keeps control flow at the call site explicit.
 
+### Pipeline Architecture
+
+All generator interaction goes through the Pipeline engine — a sequence of 5 independently testable stages sharing a `PipelineContext`:
+```
+PrepareContext → StreamResponse → ProcessToolCalls → PostProcess
+```
+
 ### Config is Passed, Not Global
 
-`CodeGruntConfig` is loaded once in `index.ts` and threaded through function arguments. Nothing imports config globally. The exception is `config.ts` which exports constants (`CONTEXT_BUDGET`, `CHAT_CONTEXT_BUDGET`) and predicate functions (`isReasonerModel`).
+`CodeGruntConfig` is loaded once in `index.ts` and threaded through function arguments. Nothing imports config globally. The exception is `config.ts` which exports constants (`CONTEXT_BUDGET`, `CHAT_CONTEXT_BUDGET`) and predicate functions (`isReasonerModel`, `supportsReasoning`).
 
 ### Provider-Agnostic Agent Loop
 
@@ -153,13 +214,21 @@ The agent loop (`runAgentLoop`) takes an `LLMProvider` interface, not a concrete
 
 `resolveAtReferences()` runs on raw user input before messages are constructed. References are stripped from the visible prompt text and appended as formatted blocks at the bottom of the message. This means the LLM sees the full content but the user's prompt remains readable.
 
-### Destructive Operations Require Double Confirmation
+### Destructive Operations Require Confirmation
 
-Write/edit/shell tools compute a diff or display the command, call `confirm()`, and only proceed on explicit "yes". The agent loop has no ability to bypass this — confirmation is inside the tool executor, not the agent.
+Write/edit/shell tools compute a diff or display the command, call `confirm()`, and only proceed on explicit "yes". The agent loop has no ability to bypass this — confirmation is inside the tool executor, not the agent. "Yes for all" is managed via `process-tools-helpers.ts`.
 
 ### Model Selection Affects Budget and Behavior
 
 `isReasonerModel()` in `config.ts` checks the model ID. Reasoner models get a larger context budget and support an `effort` parameter (controlled via `/reasoning` / `/effort` commands). This distinction flows through context manager initialization and provider request options.
+
+### Skill Auto-Discovery
+
+The Intentor automatically matches tasks to skills using keyword overlap (≥40% token match). Skills are also passed to the LLM-based classifier for more nuanced matching. Matched skills route to `runSkillFlow` which applies the skill's system prompt override.
+
+### Continuation Detection
+
+Short imperative phrases like "继续", "go on", "next" are detected by the Intentor and default to the coding path with `needsFullPlan: false`, skipping the Planner.
 
 ---
 
@@ -179,6 +248,9 @@ Write/edit/shell tools compute a diff or display the command, call `confirm()`, 
 | `CODEGRUNT_TOP_P` | Nucleus sampling (0-1) | No |
 | `CODEGRUNT_FREQUENCY_PENALTY` | Repetition penalty (-2 to 2) | No |
 | `CODEGRUNT_PRESENCE_PENALTY` | Topic diversity penalty (-2 to 2) | No |
+| `CODEGRUNT_LOG_LEVEL` | Log level: `debug` \| `info` \| `warn` \| `error` | No |
+| `CODEGRUNT_LOG_FILE` | Set to `0` or `false` to disable file logging | No |
+| `CODEGRUNT_VERBOSE` | Enable verbose stderr output | No |
 
 ### Config File
 
@@ -203,4 +275,8 @@ At startup, the context manager scans the working directory for `CODEGRUNT.md` (
 
 ### Skills Directory
 
-`~/.codegrunt/skills/` (global) and `.codegrunt/skills/` (project-local) — each skill is a `.md` file with YAML frontmatter (`name`, `description`, `system`) and a Markdown body, or a directory containing `skill.md`. Install new skills via `codegrunt skills add -f <file.zip>`. Skills appear as slash commands in the REPL.
+`~/.codegrunt/skills/` (global) and `.codegrunt/skills/` (project-local) — each skill is a `.md` file with YAML frontmatter (`name`, `description`, `system`) and a Markdown body, or a directory containing `skill.md`. Install new skills via `codegrunt skills add -f <file.zip>`. Skills appear as slash commands in the REPL and are auto-discovered by the Intentor.
+
+### Log Files
+
+Structured JSONL logs are written to `~/.codegrunt/logs/` by default. Log rotation keeps the last 5 files (max 5 MB each). File logging can be disabled via `CODEGRUNT_LOG_FILE=0`.

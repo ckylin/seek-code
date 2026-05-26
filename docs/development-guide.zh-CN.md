@@ -89,6 +89,13 @@ codegrunt/
 │   │   ├── index.ts          # 入口（commander 驱动的 CLI）
 │   │   ├── repl.ts           # 交互式 REPL 循环
 │   │   ├── input.ts          # 多行输入、Tab 补全、列表选择器
+│   │   ├── ink/              # Ink/React 终端 UI 组件
+│   │   │   ├── PromptInput.tsx   # 主输入组件（光标、历史、补全）
+│   │   │   ├── Dropdown.tsx      # 自动补全下拉菜单
+│   │   │   ├── ListPicker.tsx    # 方向键列表选择器
+│   │   │   ├── useAutocomplete.ts # 文件/命令/Skill 补全逻辑
+│   │   │   ├── useHistory.ts     # 持久化历史记录
+│   │   │   └── types.ts          # Ink 组件类型定义
 │   │   ├── commands.ts       # 斜杠命令（/help, /model, /init 等）
 │   │   ├── setup.ts          # 首次运行设置向导
 │   │   ├── init.ts           # /init 命令实现：代码库分析 + CODEGRUNT.md 生成
@@ -99,7 +106,7 @@ codegrunt/
 │   ├── core/
 │   │   ├── agent/
 │   │   │   ├── loop.ts       # 代理循环 — P/G/E 编排入口
-│   │   │   ├── intentor.ts   # 意图分类器（编码 vs 聊天）
+│   │   │   ├── intentor.ts   # 意图分类器（编码 vs 聊天 + Skill 匹配）
 │   │   │   ├── planner.ts    # 任务规划器（分解为多步骤计划）
 │   │   │   └── evaluator.ts  # 质量评估器（输出检查 + 自动修正）
 │   │   ├── pipeline/         # Harness 风格管道引擎
@@ -126,7 +133,7 @@ codegrunt/
 │   │   ├── events/
 │   │   │   └── bus.ts        # 类型化 EventBus（管道/工具/LLM 生命周期事件）
 │   │   ├── observability/
-│   │   │   ├── logger.ts     # 结构化 Logger（命名空间、分级、EventBus 集成）
+│   │   │   ├── logger.ts     # Logger v2：文件传输 + Trace ID + 日志轮转
 │   │   │   └── metrics.ts    # 轻量 Metrics（计数器、计时器、快照）
 │   │   └── di/
 │   │       └── container.ts  # 服务容器/DI（单例、瞬态、生命周期管理）
@@ -141,8 +148,7 @@ codegrunt/
 │   │   ├── markdown.ts       # 流式 Markdown 转终端渲染器
 │   │   ├── interrupt.ts      # SIGINT 处理
 │   │   ├── select.ts         # 交互式列表选择器（方向键导航）
-│   │   ├── constants.ts      # 共享常量
-│   │   └── rawMode.ts        # 原始终端模式管理
+│   │   └── constants.ts      # 共享常量
 │   ├── config.ts             # 配置加载（环境变量、配置文件）
 │   └── types.ts              # 共享 TypeScript 类型和接口
 ├── tests/
@@ -181,12 +187,14 @@ tsconfig.json 配置要点：
 - strict: true — 完整严格模式
 - declaration: true — 生成 .d.ts 文件
 - sourceMap: true — 调试源码映射
+- jsx: react-jsx — 为 React/Ink 组件提供 JSX 支持（jsxImportSource: react）
 
 关键点：
 
 - **仅 ESM**：项目在 package.json 中使用 "type": "module"。所有导入使用 .js 扩展名约定（例如 import { foo } from './bar.js'）。
 - **bundler 解析**：兼容 tsx（开发）和 tsc（生产）。
 - **declaration: true**：为使用者生成 .d.ts 类型声明文件。
+- **JSX for Ink**：`src/cli/ink/` 目录包含通过 `ink` 库在终端渲染的 React 组件。TSX 文件使用 `react-jsx` 转换。
 
 ### 开发 vs 生产
 
@@ -307,13 +315,13 @@ describe('read_file', () => {
        │
        ▼
   ┌──────────────┐
-  │   Intentor   │  意图分类：编码 → P/G/E；聊天 → 直接生成
+  │   Intentor   │  意图分类：Skill 匹配 / 编码 → P/G/E / 聊天 → 直接生成
   └──────┬───────┘
          │
     ┌────▼─────────────────────────────────────┐
     │  Planner → Generator → Evaluator          │
     │   规划        执行       质量评估           │
-    │        (评估不通过自动修正重试)              │
+    │        (评估不通过自动修正重试，最多 3 次)    │
     └──────────────────────────────────────────┘
          │
     ┌────▼──────────┐
@@ -331,15 +339,27 @@ describe('read_file', () => {
 
 代理循环是 CodeGrunt 的核心，采用 **P/G/E（Planner / Generator / Evaluator）+ Intentor** 架构：
 
-**Phase 0 — Intentor（意图分类）**：判断任务是编码类（需多步骤规划）还是聊天类（直接生成）。
+**Phase 0 — Intentor（意图分类）**：将任务分为三条路径：
+- **Skill 匹配** → `runSkillFlow`：应用 Skill 系统提示 + 内容，然后按聊天方式生成
+- **编码任务** → `runCodingFlow`：P/G/E 管道：规划 → 执行 → 评估 → 修正
+- **聊天任务** → `runChatFlow`：直接生成管道，跳过 Planner/Evaluator
+
+Intentor 优先使用快速启发式规则：
+- **关键词模式**：编码信号（写/创建/修复/重构）vs 非编码（解释/什么是/总结）
+- **Continuation 检测**：短命令式短语如「继续」「go on」「next」默认走编码路径
+- **Skill 匹配**：任务与 Skill 名称/描述的关键词重叠（≥40% 匹配度）
+
+仅在启发式规则不明确时才调用 LLM，节省延迟和费用。
 
 **编码流程 — P/G/E 管道**：
-1. **Planner（规划器）**：将复杂任务分解为 2-5 个独立可验证的步骤，使用低温（0.1）结构化 JSON 输出
-2. **Generator（生成器）**：管道引擎依次执行每个步骤 → 准备上下文 → 流式 LLM 调用 → 工具执行 → 后处理
-3. **Evaluator（评估器）**：检查输出质量 / 计划符合度 / 幻觉。不通过则注入反馈并重试（最多 2 次）
-4. 重试耗尽仍不通过则继续下一步，保证不陷入死循环
+1. **Planner（规划器）**：将复杂任务分解为 2-5 个独立可验证的步骤，使用低温（0.1）结构化 JSON 输出。短任务（≤50 字符）和 continuation 信号跳过 Planner
+2. **Generator（生成器）**：管道引擎依次执行每个步骤 → 准备上下文 → 流式 LLM 调用 → 工具执行 → 后处理。现支持**步骤内多轮迭代**——单个步骤内可进行多次工具调用往返
+3. **Evaluator（评估器）**：检查输出质量 / 计划符合度 / 幻觉。不通过则注入反馈并重试（最多 3 次，由原来的 2 次提升）。`pruneRefineMessages()` 在步骤间清理评估反馈消息
+4. `sessionHasRead` 追踪跨步骤的文件读取，避免重复操作
 
-**聊天流程**：跳过 Planner/Evaluator，直接用 Generator 管道迭代到模型停止。
+**聊天流程**：跳过 Planner/Evaluator，直接用 Generator 管道迭代到模型停止（最多 30 次）。模型返回空时显示回退文本「（模型未返回文本响应）」。
+
+**Skill 流程**：应用 Skill 系统提示 + 内容，然后按聊天模式进行工具调用迭代。
 
 关键设计决策：
 
@@ -399,9 +419,26 @@ ContextManager 维护对话历史：
 
 ### 可观测性
 
-- **Logger**（`observability/logger.ts`）：结构化分级日志，支持命名空间，错误自动发布到 EventBus
+- **Logger v2**（`observability/logger.ts`）：结构化分级日志，支持命名空间。功能包括：
+  - **文件传输**：结构化 JSONL 日志写入 `~/.codegrunt/logs/`
+  - **Trace ID**：唯一 `runId` 用于跨会话关联。通过 `createLogger('namespace', runId)` 创建
+  - **日志轮转**：保留最近 5 个日志文件，每个最大 5 MB
+  - **环境变量控制**：`CODEGRUNT_LOG_LEVEL`（debug/info/warn/error）、`CODEGRUNT_LOG_FILE`（设为 0/false 禁用）、`CODEGRUNT_VERBOSE`
+  - 错误自动发布到 EventBus
 - **Metrics**（`observability/metrics.ts`）：计数器/计时器/快照，支持遥测摘要输出
 - **EventBus**（`events/bus.ts`）：类型化事件总线，覆盖管道、工具、LLM、对话等全部生命周期事件
+
+### Ink/React 终端 UI（`src/cli/ink/`）
+
+CodeGrunt 提供基于 React 的现代终端 UI，使用 `ink` 库构建：
+
+| 组件 | 描述 |
+|---|---|
+| `PromptInput.tsx` | 主输入组件：光标移动、上下键历史导航、自动补全下拉、Ctrl+C 取消 |
+| `Dropdown.tsx` | 自动补全浮层：`❯` 指示器、skill/builtin/file 分类着色、最多 8 项可见 |
+| `ListPicker.tsx` | 方向键选择器，用于模型/配置的交互式选择 |
+| `useAutocomplete.ts` | 文件路径（`@`）补全、斜杠命令补全、Skill 名称补全 |
+| `useHistory.ts` | 持久化命令历史，方向键导航 |
 
 ---
 
@@ -660,6 +697,9 @@ CodeGrunt 的配置加载链（优先级从高到低）：
 | 频率惩罚 | `CODEGRUNT_FREQUENCY_PENALTY` | `0` |
 | 存在惩罚 | `CODEGRUNT_PRESENCE_PENALTY` | `0` |
 | Base URL | `CODEGRUNT_BASE_URL` | `https://api.deepseek.com` |
+| 日志级别 | `CODEGRUNT_LOG_LEVEL` | `info` |
+| 文件日志 | `CODEGRUNT_LOG_FILE` | 启用 |
+| 详细输出 | `CODEGRUNT_VERBOSE` | 禁用 |
 
 ### 模型判断逻辑（`src/config.ts`）
 
@@ -689,3 +729,4 @@ CodeGrunt 的配置加载链（优先级从高到低）：
 | 类型错误 | `node_modules` 过期 | 运行 `npm install` 重新安装依赖 |
 | `MODULE_NOT_FOUND` | 导入路径缺少 `.js` 扩展名 | ESM 要求导入使用 `.js` 后缀（TypeScript 约定） |
 | 工具调用无响应 | API 配额耗尽 | 检查 `/balance` 命令输出 |
+| `src/cli/ink/` 中 JSX 编译错误 | 缺少 React 类型 | 运行 `npm install` 确保安装了 `@types/react` |

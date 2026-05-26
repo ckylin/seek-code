@@ -89,6 +89,13 @@ codegrunt/
 │   │   ├── index.ts          # Entry point (commander-based CLI)
 │   │   ├── repl.ts           # Interactive REPL loop
 │   │   ├── input.ts          # Multiline input, tab completion, list selector
+│   │   ├── ink/              # Ink/React terminal UI components
+│   │   │   ├── PromptInput.tsx   # Main input with cursor, history, autocomplete
+│   │   │   ├── Dropdown.tsx      # Autocomplete dropdown overlay
+│   │   │   ├── ListPicker.tsx    # Arrow-key list selector
+│   │   │   ├── useAutocomplete.ts # File/slash/skill completion
+│   │   │   ├── useHistory.ts     # Persistent command history
+│   │   │   └── types.ts          # Ink component types
 │   │   ├── commands.ts       # Slash commands (/help, /model, /init, etc.)
 │   │   ├── setup.ts          # First-run setup wizard
 │   │   ├── init.ts           # /init command: codebase analysis + CODEGRUNT.md gen
@@ -99,7 +106,7 @@ codegrunt/
 │   ├── core/
 │   │   ├── agent/
 │   │   │   ├── loop.ts       # Agent loop — P/G/E orchestration entry
-│   │   │   ├── intentor.ts   # Intent classifier (coding vs chat)
+│   │   │   ├── intentor.ts   # Intent classifier (coding vs chat + skill matching)
 │   │   │   ├── planner.ts    # Task planner (decomposes into multi-step plan)
 │   │   │   └── evaluator.ts  # Quality evaluator (output check + auto-refine)
 │   │   ├── pipeline/         # Harness-style pipeline engine
@@ -126,7 +133,7 @@ codegrunt/
 │   │   ├── events/
 │   │   │   └── bus.ts        # Typed EventBus (pipeline/tool/LLM lifecycle events)
 │   │   ├── observability/
-│   │   │   ├── logger.ts     # Structured Logger (namespaces, levels, EventBus integration)
+│   │   │   ├── logger.ts     # Logger v2: file transport + trace IDs + log rotation
 │   │   │   └── metrics.ts    # Lightweight Metrics (counters, timers, snapshots)
 │   │   └── di/
 │   │       └── container.ts  # Service container/DI (singleton, transient, lifecycle)
@@ -141,8 +148,7 @@ codegrunt/
 │   │   ├── markdown.ts       # Streaming Markdown-to-terminal renderer
 │   │   ├── interrupt.ts      # SIGINT handling
 │   │   ├── select.ts         # Interactive list selector (arrow-key navigation)
-│   │   ├── constants.ts      # Shared constants
-│   │   └── rawMode.ts        # Raw terminal mode management
+│   │   └── constants.ts      # Shared constants
 │   ├── config.ts             # Configuration loading (env vars, config file)
 │   └── types.ts              # Shared TypeScript types and interfaces
 ├── tests/
@@ -181,12 +187,14 @@ Key tsconfig.json points:
 - strict: true — full strict mode
 - declaration: true — generate .d.ts files
 - sourceMap: true — debug source maps
+- jsx: react-jsx — JSX support for React/Ink components (jsxImportSource: react)
 
 Key points:
 
 - **ESM only**: The project uses `"type": "module"` in `package.json`. All imports use the `.js` extension convention.
 - **`bundler` resolution**: Works with `tsx` for development and `tsc` for production.
 - **`declaration: true`**: Generates `.d.ts` type declaration files for consumers.
+- **JSX for Ink**: `src/cli/ink/` contains React components that render in the terminal via the `ink` library. TSX files use the `react-jsx` transform.
 
 ### Development vs Production
 
@@ -278,13 +286,13 @@ User Input (CLI / REPL)
        │
        ▼
   ┌──────────────┐
-  │   Intentor   │  Intent classification: coding → P/G/E; chat → direct gen
+  │   Intentor   │  Intent classification: Skill match / Coding → P/G/E / Chat → direct gen
   └──────┬───────┘
          │
     ┌────▼─────────────────────────────────────┐
     │  Planner → Generator → Evaluator          │
     │   Plan       Execute     Evaluate          │
-    │     (auto-refine on eval failure)          │
+    │     (auto-refine on eval failure, max 3x)  │
     └──────────────────────────────────────────┘
          │
     ┌────▼──────────┐
@@ -302,15 +310,27 @@ User Input (CLI / REPL)
 
 The agent loop uses a **P/G/E (Planner / Generator / Evaluator) + Intentor** architecture:
 
-**Phase 0 — Intentor**: Classifies the task as coding (multi-step plan needed) or chat (direct response).
+**Phase 0 — Intentor**: Classifies the task into three paths:
+- **Skill match** → `runSkillFlow`: Applies skill system prompt + content, then chat-style generation
+- **Coding** → `runCodingFlow`: P/G/E pipeline with plan → execute → evaluate → refine
+- **Chat** → `runChatFlow`: Direct generator pipeline, skipping Planner/Evaluator
+
+Intentor uses fast heuristics first:
+- **Keyword patterns**: Coding signals (write/create/fix/refactor) vs non-coding (explain/what is/summarize)
+- **Continuation detection**: Short imperative phrases like "继续", "go on", "next" default to coding path
+- **Skill matching**: Keyword overlap between task and skill name/description (≥40% match required)
+
+LLM-based classification only fires when heuristics are ambiguous, saving latency and cost.
 
 **Coding Flow — P/G/E Pipeline**:
-1. **Planner**: Decomposes complex tasks into 2-5 independently verifiable steps, using low-temperature (0.1) structured JSON output
-2. **Generator**: Pipeline engine executes each step sequentially → prepare context → stream LLM call → tool execution → post-process
-3. **Evaluator**: Checks output quality / plan adherence / hallucinations. If it fails, injects feedback and retries (max 2x)
-4. On max retries exhausted, continues to next step — never deadlocks
+1. **Planner**: Decomposes complex tasks into 2-5 independently verifiable steps, using low-temperature (0.1) structured JSON output. Skipped for short tasks (≤50 chars) and continuation signals
+2. **Generator**: Pipeline engine executes each step sequentially → prepare context → stream LLM call → tool execution → post-process. Now supports **inner iteration** — multi-turn tool call loops within a single step
+3. **Evaluator**: Checks output quality / plan adherence / hallucinations. If it fails, injects feedback and retries (max 3x, up from 2x). `pruneRefineMessages()` cleans evaluation feedback messages between steps
+4. `sessionHasRead` tracking prevents redundant file reads across turns
 
-**Chat Flow**: Skips Planner/Evaluator, uses Generator pipeline iteratively until model stops.
+**Chat Flow**: Skips Planner/Evaluator, uses Generator pipeline iteratively until model stops (up to 30 iterations). Prints fallback text "(no text response from model)" if model returns empty.
+
+**Skill Flow**: Applies skill system prompt + content, then uses tool-call iteration loop like chat flow.
 
 Key design decisions:
 
@@ -370,9 +390,26 @@ All LLM backends implement the `LLMProvider` interface. The `StreamChunk` union 
 
 ### Observability
 
-- **Logger** (`observability/logger.ts`): Structured leveled logging with namespace support, errors auto-published to EventBus
+- **Logger v2** (`observability/logger.ts`): Structured leveled logging with namespace support. Features:
+  - **File transport**: Structured JSONL logs written to `~/.codegrunt/logs/`
+  - **Trace IDs**: Unique `runId` for correlating entries across a single session. Created via `createLogger('namespace', runId)`
+  - **Log rotation**: Keeps last 5 log files, max 5 MB each
+  - **Environment control**: `CODEGRUNT_LOG_LEVEL` (debug/info/warn/error), `CODEGRUNT_LOG_FILE` (0/false to disable), `CODEGRUNT_VERBOSE`
+  - Errors auto-published to EventBus
 - **Metrics** (`observability/metrics.ts`): Counters/timers/snapshots with telemetry summary output
 - **EventBus** (`events/bus.ts`): Typed event bus covering all lifecycle events (pipeline, tools, LLM, conversation)
+
+### Ink/React Terminal UI (`src/cli/ink/`)
+
+CodeGrunt includes a modern React-based terminal UI built with the `ink` library:
+
+| Component | Description |
+|---|---|
+| `PromptInput.tsx` | Main input with cursor movement, history navigation up/down, autocomplete dropdown, Ctrl+C cancel |
+| `Dropdown.tsx` | Autocomplete overlay with `❯` indicator, skill/builtin/file kind coloring, max 8 items visible |
+| `ListPicker.tsx` | Arrow-key selector for interactive model/config selection |
+| `useAutocomplete.ts` | File path (`@`) completion, slash command completion, skill name completion |
+| `useHistory.ts` | Persistent command history with arrow-key navigation |
 
 ---
 
@@ -559,6 +596,9 @@ CodeGrunt's config loading chain (highest to lowest priority):
 | Frequency Penalty | `CODEGRUNT_FREQUENCY_PENALTY` | `0` |
 | Presence Penalty | `CODEGRUNT_PRESENCE_PENALTY` | `0` |
 | Base URL | `CODEGRUNT_BASE_URL` | `https://api.deepseek.com` |
+| Log Level | `CODEGRUNT_LOG_LEVEL` | `info` |
+| File Logging | `CODEGRUNT_LOG_FILE` | enabled |
+| Verbose | `CODEGRUNT_VERBOSE` | disabled |
 
 ### Model Detection (`src/config.ts`)
 
@@ -588,3 +628,4 @@ CodeGrunt's config loading chain (highest to lowest priority):
 | Type errors | Stale `node_modules` | Run `npm install` |
 | `MODULE_NOT_FOUND` | Missing `.js` extension in import | ESM requires `.js` suffix in imports |
 | Tool calls unresponsive | API quota exhausted | Check `/balance` command output |
+| JSX compile errors in `src/cli/ink/` | Missing React types | Run `npm install` to ensure `@types/react` is installed |
