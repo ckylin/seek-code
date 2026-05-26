@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Box, Text, useInput } from 'ink';
+import chalk from 'chalk';
 import { accessSync } from 'fs';
 import { join } from 'path';
 import { ACCENT } from '../../utils/constants.js';
@@ -174,6 +175,20 @@ export function PromptInput({
 
   const contextFile = showMeta ? detectContextFile(cwd) : null;
 
+  // Build the entire input line as a single string with ANSI styling.
+  // Using multiple <Text> sibling nodes causes each to be measured and wrapped
+  // independently by Ink's layout engine (squashTextNodes only merges children
+  // of the same node). A single <Text> node is squashed into one text block,
+  // so Ink wraps it correctly as a continuous stream.
+  const promptStyled = activeSkill
+    ? chalk.hex('#6C63FF').bold(promptStr)
+    : chalk.hex(ACCENT)(promptStr);
+
+  const beforeCursor = input.slice(0, cursor);
+  const cursorChar = input[cursor] ?? ' ';
+  const afterCursor = input.slice(cursor + 1);
+  const inputLine = beforeCursor + chalk.inverse(cursorChar) + afterCursor;
+
   return (
     <Box flexDirection="column">
       {showMeta && (model || contextFile) && (
@@ -187,14 +202,7 @@ export function PromptInput({
           </Text>
         </Box>
       )}
-      <Box>
-        <Text color={activeSkill ? '#6C63FF' : ACCENT} bold={!!activeSkill}>
-          {promptStr}
-        </Text>
-        <Text>{input.slice(0, cursor)}</Text>
-        <Text inverse>{input[cursor] || ' '}</Text>
-        <Text>{input.slice(cursor + 1)}</Text>
-      </Box>
+      <Text>{promptStyled + inputLine}</Text>
       <Dropdown
         items={dropdownItems}
         selectedIndex={dropdownIndex}
