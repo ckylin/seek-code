@@ -1,6 +1,6 @@
-import { select } from '@inquirer/prompts';
-import { ACCENT } from './constants.js';
-import chalk from 'chalk';
+import React from 'react';
+import { render } from 'ink';
+import { ListPicker } from '../cli/ink/ListPicker.js';
 
 export interface SelectorItem {
   value: string;
@@ -16,27 +16,17 @@ export async function selectFromList(
 ): Promise<string | null> {
   if (items.length === 0) return null;
 
-  try {
-    const result = await select<string>({
-      message: title,
-      choices: items.map((i) => ({
-        name: i.kind === 'skill'
-          ? chalk.white(i.label) + (i.desc ? chalk.gray('  ' + i.desc) : '')
-          : chalk.hex(ACCENT)(i.label) + (i.desc ? chalk.gray('  ' + i.desc) : ''),
-        value: i.value,
-        short: i.label,
-      })),
-      default: currentValue,
-      theme: {
-        icon: { cursor: chalk.hex(ACCENT)('❯') },
-        style: {
-          highlight: (text: string) => chalk.bold.hex(ACCENT)(text),
+  return new Promise((resolve) => {
+    const { unmount } = render(
+      React.createElement(ListPicker, {
+        title,
+        items,
+        currentValue,
+        onSubmit: (value) => {
+          unmount();
+          resolve(value);
         },
-      },
-    });
-    return result;
-  } catch {
-    // Ctrl+C or Esc
-    return null;
-  }
+      }),
+    );
+  });
 }

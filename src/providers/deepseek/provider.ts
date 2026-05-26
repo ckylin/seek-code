@@ -157,7 +157,7 @@ function printUsage(usage: OpenAI.CompletionUsage, model: string): void {
   const outputTokens = usage.completion_tokens ?? 0;
   const cacheHits = cached ?? 0;
 
-  if (cached !== undefined) {
+  if (cached !== undefined && (process.env['DEBUG'] || process.env['CODEGRUNT_VERBOSE'])) {
     const total = inputTokens;
     const hitPct = total > 0 ? Math.round((cached / total) * 100) : 0;
     const hitColor = hitPct >= 50 ? chalk.green : hitPct > 0 ? chalk.yellow : chalk.gray;

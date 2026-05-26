@@ -23,7 +23,6 @@ export const BUILTIN_COMMANDS: CommandDescriptor[] = [
   { name: 'model',   desc: 'Switch model interactively' },
   { name: 'config',  desc: 'View or change config (temperature, reasoning, etc.)' },
   { name: 'skills',  desc: 'List and manage skills' },
-  { name: 'token',   desc: 'Update your DeepSeek API key' },
   { name: 'compact', desc: 'Summarize and compress conversation history to save tokens' },
   { name: 'review',  desc: 'Review session changes for logic issues' },
   { name: 'clear',   desc: 'Clear conversation context' },
@@ -39,7 +38,6 @@ export type SlashCommandResult =
   | { type: 'config_changed'; config: CodeGruntConfig }
   | { type: 'model_changed'; config: CodeGruntConfig }
   | { type: 'exit' }
-  | { type: 'skill_run'; prompt: string; system?: string }
   | { type: 'skills_reload' }
   | { type: 'not_a_command' };
 
@@ -107,12 +105,6 @@ export async function handleSlashCommand(
       return { type: 'handled' };
 
     default: {
-      // Check if it matches a loaded skill
-      const skill = skills.find((s) => s.name.toLowerCase() === cmd.toLowerCase());
-      if (skill) {
-        const prompt = args ? `${skill.content}\n\n${args}` : skill.content;
-        return { type: 'skill_run', prompt, system: skill.system };
-      }
       console.log(chalk.yellow(`Unknown command: /${cmd}. Type /help for available commands.`));
       return { type: 'handled' };
     }
@@ -143,7 +135,6 @@ ${chalk.bold('Slash Commands')}
                         Keys: ${chalk.gray('temperature  maxtokens  topp  frequencypenalty  presencepenalty  reasoning')}
   ${chalk.cyan('/reasoning')}         Set reasoning effort for R1 models (low/medium/high)
   ${chalk.cyan('/effort <level>')}    Shortcut: /effort low | /effort medium | /effort high
-  ${chalk.cyan('/token [key]')}       Update your DeepSeek API key
   ${chalk.cyan('/cost')}              Show session token usage and cost (DeepSeek pricing)
   ${chalk.cyan('/balance')}           Show account balance, today's & this month's usage
   ${chalk.cyan('/skills')}            List and manage skills (create, list)

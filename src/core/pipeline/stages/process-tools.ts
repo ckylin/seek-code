@@ -20,12 +20,12 @@ export class ProcessToolCallsStage implements Stage {
   readonly name = 'process-tool-calls';
 
   async execute(ctx: PipelineContext): Promise<StageResult> {
-    // Reset per-turn state before processing
-    resetYesAll();
-
     if (ctx.finishReason !== 'tool_calls' || ctx.toolCalls.length === 0) {
       return { continue: true, done: false };
     }
+
+    // Reset per-turn "yes for all" state only when we are actually about to run tools
+    resetYesAll();
 
     const bus = getDefaultEventBus();
     const metrics = getDefaultMetrics();

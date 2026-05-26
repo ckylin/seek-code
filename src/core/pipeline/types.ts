@@ -22,6 +22,8 @@ export interface IntentResult {
   reason: string;
   /** Whether a lightweight planner is sufficient (non-coding tasks) */
   needsFullPlan: boolean;
+  /** Matched skill, if the intent maps to a loaded skill */
+  matchedSkill?: { name: string; content: string; system?: string };
 }
 
 /** A single step in an execution plan */

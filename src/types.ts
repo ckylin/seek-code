@@ -119,6 +119,8 @@ export interface AgentRunOptions {
   /** When provided, replaces the default coding-assistant system prompt.
    *  Used by skills to define a completely different role/identity. */
   systemPromptOverride?: string;
+  /** Loaded skills — passed to Intentor for automatic skill routing. */
+  skills?: import('./cli/skills.js').Skill[];
   onText?: (text: string) => void;
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: ToolResult) => void;

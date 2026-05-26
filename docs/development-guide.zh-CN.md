@@ -91,35 +91,58 @@ codegrunt/
 │   │   ├── input.ts          # 多行输入、Tab 补全、列表选择器
 │   │   ├── commands.ts       # 斜杠命令（/help, /model, /init 等）
 │   │   ├── setup.ts          # 首次运行设置向导
+│   │   ├── init.ts           # /init 命令实现：代码库分析 + CODEGRUNT.md 生成
 │   │   ├── skills.ts         # 技能加载和管理
 │   │   ├── update.ts         # 版本检查和升级
 │   │   ├── banner.ts         # ASCII 艺术横幅
 │   │   └── at-resolver.ts    # @文件/@URL 引用展开
 │   ├── core/
 │   │   ├── agent/
-│   │   │   └── loop.ts       # 代理循环——核心推理/行动循环
+│   │   │   ├── loop.ts       # 代理循环 — P/G/E 编排入口
+│   │   │   ├── intentor.ts   # 意图分类器（编码 vs 聊天）
+│   │   │   ├── planner.ts    # 任务规划器（分解为多步骤计划）
+│   │   │   └── evaluator.ts  # 质量评估器（输出检查 + 自动修正）
+│   │   ├── pipeline/         # Harness 风格管道引擎
+│   │   │   ├── engine.ts     # PipelineEngine：阶段执行器
+│   │   │   ├── types.ts      # 管道上下文、阶段接口、P/G/E 类型定义
+│   │   │   └── stages/
+│   │   │       ├── prepare-context.ts   # 构建系统提示 + 注入项目指南
+│   │   │       ├── stream-response.ts   # 流式 LLM 调用 + Token 累积
+│   │   │       ├── process-tools.ts     # 工具调用解析 + 执行 + 结果注入
+│   │   │       ├── process-tools-helpers.ts  # yes-for-all 会话状态
+│   │   │       └── post-process.ts      # 后处理：盲写警告、Token 统计
 │   │   ├── tools/
-│   │   │   ├── registry.ts   # 工具注册和查找
-│   │   │   ├── executor.ts   # 工具执行（含用户确认）
+│   │   │   ├── registry.ts   # 插件式 ToolRegistry（运行时注册/移除）
+│   │   │   ├── executor.ts   # 工具执行（含 diff 确认、参数验证）
 │   │   │   ├── read_file.ts
 │   │   │   ├── write_file.ts
 │   │   │   ├── edit_file.ts
 │   │   │   ├── execute_shell.ts
 │   │   │   ├── list_directory.ts
 │   │   │   └── search_files.ts
-│   │   └── context/
-│   │       ├── manager.ts    # 上下文窗口管理（Token 预算、裁剪）
-│   │       └── project-guide.ts  # 加载 CODEGRUNT.md / CLAUDE.md 项目指南
+│   │   ├── context/
+│   │   │   ├── manager.ts    # 上下文窗口管理（Token 预算、裁剪）
+│   │   │   └── project-guide.ts  # 加载 CODEGRUNT.md / CLAUDE.md 项目指南
+│   │   ├── events/
+│   │   │   └── bus.ts        # 类型化 EventBus（管道/工具/LLM 生命周期事件）
+│   │   ├── observability/
+│   │   │   ├── logger.ts     # 结构化 Logger（命名空间、分级、EventBus 集成）
+│   │   │   └── metrics.ts    # 轻量 Metrics（计数器、计时器、快照）
+│   │   └── di/
+│   │       └── container.ts  # 服务容器/DI（单例、瞬态、生命周期管理）
 │   ├── providers/
 │   │   └── deepseek/
 │   │       ├── provider.ts   # DeepSeek LLM 提供商实现
-│   │       └── client.ts     # OpenAI 兼容客户端工厂
+│   │       └── client.ts     # OpenAI 兼容客户端工厂 + API Key 验证
 │   ├── utils/
-│   │   ├── display.ts        # 终端输出格式化
+│   │   ├── display.ts        # 终端输出格式化（计划、步骤、评估）
 │   │   ├── confirm.ts        # Diff 预览和用户确认
 │   │   ├── billing.ts        # 余额/用量查询和费用展示
 │   │   ├── markdown.ts       # 流式 Markdown 转终端渲染器
-│   │   └── interrupt.ts      # SIGINT 处理
+│   │   ├── interrupt.ts      # SIGINT 处理
+│   │   ├── select.ts         # 交互式列表选择器（方向键导航）
+│   │   ├── constants.ts      # 共享常量
+│   │   └── rawMode.ts        # 原始终端模式管理
 │   ├── config.ts             # 配置加载（环境变量、配置文件）
 │   └── types.ts              # 共享 TypeScript 类型和接口
 ├── tests/
@@ -212,309 +235,6 @@ npx tsx src/cli/index.ts "列出当前目录的文件"
 npm run typecheck
 ```
 
-### 调试
-
-CodeGrunt 提供了多种调试方式，从快速日志打印到完整的 IDE 断点调试。以下按推荐顺序排列。
-
----
-
-#### 方法 1：VS Code 内置断点调试（强烈推荐）
-
-项目已包含预置的 `.vscode/launch.json`，开箱即用。按 `Ctrl+Shift+D` 打开调试面板，顶部下拉选择配置，按 `F5` 启动。
-
-**5 种调试配置：**
-
-| 配置名称 | 作用 | 适用场景 |
-|---|---|---|
-| 🚀 启动 REPL（交互模式） | 以调试模式启动交互式 CLI | 调试命令处理、REPL 界面、输入补全 |
-| 🔧 单次任务调试 | 执行一个任务后退出的 Debug | 调试完整 Agent 循环、工具调用链路 |
-| 🧪 调试当前测试文件 | 运行并调试当前打开的测试文件 | 调试某个工具的单元测试 |
-| 🧪 调试全部测试 | 运行全部测试并调试 | 检查整体测试质量 |
-| 🌐 Chrome DevTools 远程调试 | 带 `--inspect` 参数启动，在 Chrome 中调试 | 偏好浏览器开发者工具时使用 |
-
-**配置文件内容（`.vscode/launch.json`）：**
-
-```json
-{
-  "version": "0.2.0",
-  "configurations": [
-    {
-      "name": "🚀 启动 REPL（交互模式）",
-      "type": "node",
-      "request": "launch",
-      "runtimeArgs": ["--import", "tsx"],
-      "args": ["src/cli/index.ts"],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "🔧 单次任务调试",
-      "type": "node",
-      "request": "launch",
-      "runtimeArgs": ["--import", "tsx"],
-      "args": ["src/cli/index.ts", "列出当前目录的文件"],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "🧪 调试当前测试文件",
-      "type": "node",
-      "request": "launch",
-      "runtimeArgs": [
-        "--import", "tsx",
-        "${workspaceFolder}/node_modules/vitest/vitest.mjs"
-      ],
-      "args": ["run", "${relativeFile}"],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "🧪 调试全部测试",
-      "type": "node",
-      "request": "launch",
-      "runtimeArgs": [
-        "--import", "tsx",
-        "${workspaceFolder}/node_modules/vitest/vitest.mjs"
-      ],
-      "args": ["run"],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "🌐 Chrome DevTools 远程调试",
-      "type": "node",
-      "request": "launch",
-      "runtimeArgs": ["--inspect", "--import", "tsx"],
-      "args": ["src/cli/index.ts"],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}"
-    }
-  ]
-}
-```
-
-**额外 VS Code 设置（`.vscode/settings.json`）：**
-
-```json
-{
-  "typescript.tsdk": "node_modules/typescript/lib",
-  "typescript.enablePromptUseWorkspaceTsdk": true
-}
-```
-
-这确保 VS Code 使用项目中安装的 TypeScript 版本，避免类型检查不一致。
-
----
-
-#### 方法 2：Chrome DevTools 远程调试
-
-如果你更喜欢 Chrome 浏览器开发者工具，可以通过以下方式启动：
-
-```bash
-# 从终端启动带 --inspect 参数
-node --inspect --import tsx src/cli/index.ts
-```
-
-然后在 Chrome 地址栏输入 `chrome://inspect`，点击 **"Open dedicated DevTools for Node"**。一个独立的 DevTools 窗口会打开，你可以在其中：
-
-- 在 Sources 面板中对 TypeScript 源码设置断点
-- 使用 Console 面板执行表达式
-- 查看调用堆栈、变量和作用域
-
-> **注意**：`tsconfig.json` 中已启用 `"sourceMap": true`，因此 Source Map 会自动将编译后的 JS 映射回 TypeScript 源码。
-
----
-
-#### 方法 3：console.error 日志调试（最快速）
-
-由于 CodeGrunt 的工具输出通过 **stdout** 传递，**严禁使用 `console.log()`**——它会污染工具输出，破坏解析逻辑。
-
-```typescript
-// ✅ 正确：输出到 stderr，不影响工具输出
-console.error('[DEBUG] 参数:', params);
-console.error('[DEBUG] 当前状态:', JSON.stringify(state, null, 2));
-
-// ❌ 错误：输出到 stdout，破坏工具输出
-console.log('[DEBUG] 参数:', params);
-```
-
----
-
-#### 方法 4：开发热重载模式
-
-不需要完整断点调试时，watch 模式是最快的方式：
-
-```bash
-npm run dev
-```
-
-每次保存 `src/` 下的文件，程序自动重启。配合 `console.error` 日志可以快速迭代。
-
----
-
-#### 各模块断点位置速查表
-
-根据你想调试的部分，在对应文件的对应位置打断点：
-
-| 调试目标 | 关键文件 | 推荐断点位置 |
-|---|---|---|
-| **REPL 启动流程** | `src/cli/repl.ts` | `startRepl()` 函数入口（约第 15 行） |
-| **用户输入处理** | `src/cli/input.ts` | `question()` 函数（约第 80 行） |
-| **多行输入解析** | `src/cli/input.ts` | `isInputTuple()` 返回处 |
-| **@引用解析** | `src/cli/at-resolver.ts` | `resolveAtReferences()` 函数入口 |
-| **斜杠命令分发** | `src/cli/commands.ts` | `handleSlashCommand()` 的 switch 语句 |
-| **Agent 循环——消息构建** | `src/core/agent/loop.ts` | `runAgentLoop()` 中 `messages.push()` 处 |
-| **Agent 循环——LLM 调用** | `src/core/agent/loop.ts` | `provider.stream()` 调用处 |
-| **Agent 循环——工具调用解析** | `src/core/agent/loop.ts` | `toolCalls` 变量赋值后 |
-| **Agent 循环——结果返回** | `src/core/agent/loop.ts` | `finalResponse` 赋值处 |
-| **工具注册** | `src/core/tools/registry.ts` | `getTool()` 调用处 |
-| **工具执行——参数验证** | `src/core/tools/executor.ts` | `executeToolCall()` 函数入口 |
-| **工具执行——确认弹窗** | `src/core/tools/executor.ts` | `confirm()` 调用处 |
-| **工具执行——结果构造** | `src/core/tools/executor.ts` | `return` 语句处 |
-| **read_file 工具** | `src/core/tools/read_file.ts` | `execute()` 函数入口 |
-| **write_file 工具** | `src/core/tools/write_file.ts` | `execute()` 函数入口，`writeFile()` 调用前 |
-| **edit_file 工具** | `src/core/tools/edit_file.ts` | 字符串匹配替换逻辑处 |
-| **execute_shell 工具** | `src/core/tools/execute_shell.ts` | `exec()` 调用前后 |
-| **LLM 请求发送** | `src/providers/deepseek/provider.ts` | `stream()` 方法入口 |
-| **LLM 流式响应处理** | `src/providers/deepseek/provider.ts` | `for await` 循环内 |
-| **Token 使用统计** | `src/providers/deepseek/provider.ts` | `usage` 对象构建处 |
-| **上下文裁剪** | `src/core/context/manager.ts` | `trim()` 方法 |
-| **项目指南加载** | `src/core/context/project-guide.ts` | `loadProjectGuide()` 函数 |
-| **配置加载** | `src/config.ts` | `loadConfig()` 函数 |
-| **费用/余额查询** | `src/utils/billing.ts` | `fetchBalance()` 函数 |
-| **Diff 预览** | `src/utils/confirm.ts` | `confirm()` 函数 |
-
----
-
-#### 实战演练：5 种调试场景完整流程
-
-##### 场景 A：调试 REPL 启动和界面交互
-
-1. 在 VS Code 中打开项目
-2. 按 `Ctrl+Shift+D` 切换到调试面板
-3. 顶部下拉选择 **"🚀 启动 REPL（交互模式）"**
-4. 在 `src/cli/commands.ts` 的 `handleSlashCommand()` 函数入口处按 `F9` 设置断点
-5. 按 `F5` 启动调试
-6. 程序启动，REPL 在集成终端中显示提示符
-7. 在终端中输入 `/help` 并回车
-8. 断点触发，可以：
-   - 按 `F10` 单步跳过（Step Over）
-   - 按 `F11` 单步进入（Step Into）
-   - 鼠标悬停变量查看值
-   - 在左侧变量面板查看完整作用域
-9. 继续执行（`F5`），观察 `/help` 输出
-
-##### 场景 B：调试一次完整的对话流程
-
-1. 选择 **"🔧 单次任务调试"**
-2. 在 `src/core/agent/loop.ts` 的 `runAgentLoop()` 以下位置设断点：
-   - 函数入口（观察参数）
-   - `messages.push(userMessage)` 之后（观察消息构建）
-   - `provider.stream()` 调用处（观察 LLM 请求）
-   - `toolCalls` 解析后（观察工具调用）
-   - `finalResponse` 赋值处（观察最终结果）
-3. 按 `F5` 启动
-4. 在每个断点处检查：
-   - 消息列表是否正确（system + user）
-   - LLM 请求参数是否完整
-   - 工具调用参数是否匹配定义
-   - 最终响应是否符合预期
-5. 注意：任务执行需要 API 密钥且会产生费用
-
-##### 场景 C：调试特定工具（不产生 API 费用）
-
-1. 打开要调试的测试文件，如 `tests/tools/read_file.test.ts`
-2. 选择 **"🧪 调试当前测试文件"**
-3. 在对应工具源码（如 `src/core/tools/read_file.ts`）的 `execute()` 入口打断点
-4. 按 `F5`，断点触发后可单步跟踪完整工具逻辑
-5. 这是最推荐的调试方式：**零 API 费用 + 快速验证**
-
-##### 场景 D：调试上下文裁剪逻辑
-
-1. 选择 **"🔧 单次任务调试"**
-2. 在 `src/core/context/manager.ts` 的 `trim()` 方法打断点
-3. 在 `addMessage()` 方法也打断点
-4. 启动后观察每次添加消息时的 Token 估算值和裁剪行为
-5. 用调试控制台执行 `messages.map(m => m.role)` 查看消息角色分布
-
-##### 场景 E：使用 Chrome DevTools 调试
-
-1. 选择 **"🌐 Chrome DevTools 远程调试"**
-2. 按 `F5` 启动
-3. 打开 Chrome，地址栏输入 `chrome://inspect`
-4. 点击 "Open dedicated DevTools for Node"
-5. 在 Sources 面板 → Filesystem → 添加项目文件夹
-6. 导航到 `src/` 下的 TypeScript 文件，点击行号设置断点
-7. 在 REPL 中输入命令触发断点
-
----
-
-#### console.error 调试日志模板
-
-将以下代码粘贴到需要调试的函数中：
-
-```typescript
-// === 通用调试模板 ===
-console.error('========================================');
-console.error('[DEBUG] 函数名:', 'functionName');
-console.error('[DEBUG] 参数:', JSON.stringify(params, null, 2));
-console.error('[DEBUG] 调用栈:', new Error().stack?.split('\n').slice(2, 6).join('\n'));
-console.error('========================================');
-
-// === Agent 循环专用 ===
-console.error('[Loop] 迭代: %d, 消息数: %d, Token 使用: %d',
-  iteration, messages.length, currentUsage.totalTokens);
-
-// === 工具执行专用 ===
-console.error('[Tool] %s 被调用，参数: %o', toolName, args);
-console.error('[Tool] 执行结果 success=%s, output 长度=%d',
-  result.success, result.output?.length);
-
-// === Provider 专用 ===
-console.error('[Provider] 发送请求 → model=%s, messages=%d, tools=%d',
-  options.model, messages.length, options.tools?.length ?? 0);
-
-// === 上下文管理专用 ===
-console.error('[Context] 估算 Token: %d / 预算: %d (%.1f%%)',
-  estimatedTokens, budget, (estimatedTokens / budget) * 100);
-```
-
----
-
-#### 常见调试问题速查表
-
-| 症状 | 可能原因 | 排查步骤 |
-|---|---|---|
-| LLM 返回空响应 | API 密钥无效或网络不通 | 1. `console.error` 打印 API 响应状态码 2. 在 `provider.ts` stream() 中检查是否抛异常 |
-| 工具调用失败 | 参数格式不匹配 schema | 1. 在 `executor.ts` 入口打 `console.error` 2. 对比工具 definition 和 LLM 传入的参数 |
-| 上下文被意外裁剪 | Token 估算偏大 | 1. 在 `manager.ts` trim() 中加日志 2. 检查估算比例是否正确（当前 4 chars/token） |
-| 流式输出卡顿 | 迭代器没有正确 yield | 1. 在 `provider.ts` for await 循环中加 `console.error` 2. 检查每个 chunk 是否及时 yield |
-| 斜杠命令不生效 | 命令解析错误 | 1. 在 `commands.ts` handleSlashCommand 打断点 2. 检查返回的 discriminated union 类型 |
-| 类型错误 | 类型定义不匹配 | 运行 `npm run typecheck` 获取完整错误列表 |
-| 构建成功但行为异常 | 编译输出与源码不一致 | 1. 检查 `dist/` 目录下的编译结果 2. 确认 `.js` 扩展名导入是否正确 |
-| 断点不命中 | Source Map 未正确映射 | 1. 确认 `tsconfig.json` 中 `"sourceMap": true` 2. 清除 `dist/` 重新构建 |
-| Vitest 调试不工作 | vitest.mjs 路径问题 | 确认使用 `${workspaceFolder}/node_modules/vitest/vitest.mjs` 路径 |
-
----
-
-#### 使用测试进行调试
-
-编写或运行测试是验证工具行为的最可靠方式：
-
-```bash
-# 运行单个测试文件快速验证
-npx vitest run tests/tools/read_file.test.ts
-
-# 使用 --reporter=verbose 获取详细输出
-npx vitest --reporter=verbose
-
-# 使用 watch 模式在修改代码时自动重跑测试
-npx vitest
-
-# 仅运行匹配名称的测试
-npx vitest run -t "读取已存在的文件"
-```
-
 ---
 
 ## 测试
@@ -586,37 +306,52 @@ describe('read_file', () => {
 用户输入 (CLI / REPL)
        │
        ▼
-  ┌─────────────┐
-  │  代理循环    │ ◄──── LLM 提供商（流式）
-  │  (loop.ts)  │ ────► 工具执行
-  └──────┬──────┘
+  ┌──────────────┐
+  │   Intentor   │  意图分类：编码 → P/G/E；聊天 → 直接生成
+  └──────┬───────┘
          │
-    ┌────┴────┐
-    │  工具    │
-    │ (6 个)   │
+    ┌────▼─────────────────────────────────────┐
+    │  Planner → Generator → Evaluator          │
+    │   规划        执行       质量评估           │
+    │        (评估不通过自动修正重试)              │
+    └──────────────────────────────────────────┘
+         │
+    ┌────▼──────────┐
+    │  管道引擎       │  5 个阶段：准备→流式→工具→后处理
+    │  (Pipeline)    │
+    └───────────────┘
+         │
+    ┌────▼────┐
+    │  工具    │  6 个内置工具 + 插件式注册表
+    │ (6+)    │
     └─────────┘
 ```
 
 ### 代理循环（src/core/agent/loop.ts）
 
-代理循环是 CodeGrunt 的核心。它遵循 ReAct（推理 + 行动）模式：
+代理循环是 CodeGrunt 的核心，采用 **P/G/E（Planner / Generator / Evaluator）+ Intentor** 架构：
 
-1. **系统提示** 在每个会话中构建一次（保持稳定以最大化提示缓存命中率）。
-2. **用户消息** 附加 [cwd] 和 [date] 前缀。
-3. **流式响应** 来自 LLM——处理文本增量、推理增量和工具调用增量。
-4. **如果收到工具调用**，执行每个工具并将结果反馈给 LLM。
-5. **如果是文本响应**（finish_reason = "stop"），输出给用户并结束。
-6. **循环** 最多 30 次迭代以处理多步骤任务。
+**Phase 0 — Intentor（意图分类）**：判断任务是编码类（需多步骤规划）还是聊天类（直接生成）。
+
+**编码流程 — P/G/E 管道**：
+1. **Planner（规划器）**：将复杂任务分解为 2-5 个独立可验证的步骤，使用低温（0.1）结构化 JSON 输出
+2. **Generator（生成器）**：管道引擎依次执行每个步骤 → 准备上下文 → 流式 LLM 调用 → 工具执行 → 后处理
+3. **Evaluator（评估器）**：检查输出质量 / 计划符合度 / 幻觉。不通过则注入反馈并重试（最多 2 次）
+4. 重试耗尽仍不通过则继续下一步，保证不陷入死循环
+
+**聊天流程**：跳过 Planner/Evaluator，直接用 Generator 管道迭代到模型停止。
 
 关键设计决策：
 
-- **系统提示稳定性**：系统提示只构建一次，在会话期间不会更改。这最大化 DeepSeek 的提示缓存命中率。
-- **上下文管理**：ContextManager 跟踪 Token 使用情况，当超出预算时裁剪旧消息。
-- **流式优先**：所有 LLM 通信通过 AsyncIterable 流式传输，实现实时终端输出。
+- **系统提示稳定性**：系统提示只构建一次，会话期间不更改。最大化 DeepSeek 提示缓存命中率。
+- **管道架构**：借鉴 Harness CI/CD，5 个独立可测试阶段共享 `PipelineContext`
+- **EventBus**：所有生命周期事件（管道启动/完成、工具调用、LLM 用量）通过类型化 EventBus 发布
+- **DI 容器**：服务通过 `ServiceContainer` 注册/解析，支持单例和瞬态生命周期
+- **流式优先**：所有 LLM 通信通过 `AsyncIterable<StreamChunk>` 流式传输，实时终端输出
 
 ### 工具系统
 
-工具是 LLM 与用户环境交互的机制。每个工具实现 Tool 接口。
+工具是 LLM 与用户环境交互的机制。每个工具实现 `Tool` 接口，通过插件式 `ToolRegistry` 注册（支持运行时动态添加/移除）。
 
 六个内置工具：
 
@@ -629,7 +364,21 @@ describe('read_file', () => {
 | list_directory | 列出目录树（可配置深度） |
 | search_files | 在文件中搜索文本模式 |
 
-**安全性**：在破坏性操作（write_file、edit_file、execute_shell）之前，执行器会显示 diff 预览并请求用户确认。
+**安全性**：在破坏性操作（write_file、edit_file、execute_shell）之前，执行器会显示 diff 预览并请求用户确认，提供三个选项：是、本次会话全部允许、否。
+
+### 管道引擎（src/core/pipeline/）
+
+借鉴 Harness CI/CD 管道架构，将每次 Agent 交互分解为 5 个独立阶段：
+
+| 阶段 | 文件 | 职责 |
+|---|---|---|
+| PrepareContext | `prepare-context.ts` | 构建系统提示、注入项目指南、初始化消息 |
+| StreamResponse | `stream-response.ts` | 流式调用 LLM、累积文本/推理/工具调用 |
+| ProcessToolCalls | `process-tools.ts` | 解析工具调用、通过 executor 执行、注入结果 |
+| ProcessToolHelpers | `process-tools-helpers.ts` | yes-for-all 会话级状态管理 |
+| PostProcess | `post-process.ts` | 盲写警告检测、Token 统计、最终输出格式化 |
+
+所有阶段共享一个 `PipelineContext`，由 `PipelineEngine` 按序执行。
 
 ### 上下文管理（src/core/context/manager.ts）
 
@@ -647,6 +396,12 @@ ContextManager 维护对话历史：
 - reasoning_delta — 思维链推理（显示为 Thinking...）
 - tool_call_delta — 流式工具调用参数
 - finish — 流结束，包含结束原因
+
+### 可观测性
+
+- **Logger**（`observability/logger.ts`）：结构化分级日志，支持命名空间，错误自动发布到 EventBus
+- **Metrics**（`observability/metrics.ts`）：计数器/计时器/快照，支持遥测摘要输出
+- **EventBus**（`events/bus.ts`）：类型化事件总线，覆盖管道、工具、LLM、对话等全部生命周期事件
 
 ---
 
@@ -743,21 +498,16 @@ export const myTool: Tool = {
 
 ### 步骤 2：注册工具
 
-添加到 src/core/tools/registry.ts：
+添加到 src/core/tools/registry.ts 的 `ToolRegistry.registerBuiltins()` 方法中：
 
 ```typescript
 import { myTool } from './my_tool.js';
-
-const ALL_TOOLS: Tool[] = [
-  readFileTool, writeFileTool, editFileTool,
-  executeShellTool, listDirectoryTool, searchFilesTool,
-  myTool,
-];
+// 在 registerBuiltins() 数组中添加 myTool,
 ```
 
 ### 步骤 3：添加安全确认（如果是破坏性操作）
 
-在 src/core/tools/executor.ts 中添加确认逻辑。
+在 src/core/tools/executor.ts 的 `executeTool()` 中添加确认逻辑（参考 edit_file/write_file 的处理方式）。
 
 ### 步骤 4：编写测试
 
@@ -810,9 +560,6 @@ codegrunt "解释 @src/core/agent/loop.ts"
 
 # 引用多个文件
 codegrunt "比较 @src/config.ts 和 @src/types.ts"
-
-# 带行号的引用（如果解析器支持）
-codegrunt "修复 @src/cli/index.ts:42-56 中的 bug"
 ```
 
 ### URL 引用
@@ -888,117 +635,57 @@ npm run build       # 编译
 
 ### 优先级
 
-如果 `CODEGRUNT.md` 和 `CLAUDE.md` 同时存在，`CODEGRUNT.md` 优先。
+如果 `CODEGRUNT.md` 和 `CLAUDE.md` 同时存在，`CODEGRUNT.md` 优先加载。两个文件都支持 Markdown 格式。
 
 ---
 
 ## 配置系统
 
-### 配置来源（按优先级排序）
+CodeGrunt 的配置加载链（优先级从高到低）：
 
-1. **环境变量**（最高优先级）
-2. **~/.codegrunt/config.json**（用户配置文件）
-3. **硬编码默认值**（最低优先级）
+1. 环境变量（如 `CODEGRUNT_MODEL`）
+2. `~/.codegrunt/config.json` 配置文件
+3. 硬编码默认值（`src/config.ts` 中的 `DEFAULTS`）
 
-### 环境变量
+### 关键配置项
 
-| 变量 | 描述 | 默认值 |
+| 配置项 | 环境变量 | 默认值 |
 |---|---|---|
-| DEEPSEEK_API_KEY | DeepSeek API 密钥 | — |
-| CODEGRUNT_MODEL | 模型 ID | deepseek-v4-pro |
-| CODEGRUNT_PROVIDER | 提供商 ID | deepseek |
-| CODEGRUNT_MAX_TOKENS | 每次响应最大 Token 数 | 8192 |
-| CODEGRUNT_TEMPERATURE | 温度参数 (0-2) | 0.2 |
-| CODEGRUNT_BASE_URL | API 基础 URL | https://api.deepseek.com |
-| CODEGRUNT_REASONING_EFFORT | R1 推理强度：`low` \| `medium` \| `high` | medium |
-| CODEGRUNT_TOP_P | 核采样 (0-1) | 1 |
-| CODEGRUNT_FREQUENCY_PENALTY | 重复惩罚 (-2 到 2) | 0 |
-| CODEGRUNT_PRESENCE_PENALTY | 主题多样性惩罚 (-2 到 2) | 0 |
+| API Key | `DEEPSEEK_API_KEY` | — |
+| 模型 | `CODEGRUNT_MODEL` | `deepseek-v4-pro` |
+| 最大 Token | `CODEGRUNT_MAX_TOKENS` | `8192` |
+| 温度 | `CODEGRUNT_TEMPERATURE` | `0.2` |
+| 推理强度 | `CODEGRUNT_REASONING_EFFORT` | `medium` |
+| Top-P | `CODEGRUNT_TOP_P` | `1` |
+| 频率惩罚 | `CODEGRUNT_FREQUENCY_PENALTY` | `0` |
+| 存在惩罚 | `CODEGRUNT_PRESENCE_PENALTY` | `0` |
+| Base URL | `CODEGRUNT_BASE_URL` | `https://api.deepseek.com` |
 
-### 配置文件位置
+### 模型判断逻辑（`src/config.ts`）
 
-~/.codegrunt/config.json
-
-```json
-{
-  "apiKey": "sk-...",
-  "model": "deepseek-v4-pro",
-  "maxTokens": 8192,
-  "temperature": 0.2,
-  "provider": "deepseek",
-  "baseURL": "https://api.deepseek.com",
-  "reasoningEffort": "medium",
-  "topP": 1,
-  "frequencyPenalty": 0,
-  "presencePenalty": 0
-}
-```
+- `isReasonerModel(model)`：检测是否为 R1 推理模型（ID 包含 `reasoner` 或 `r1`）
+- `supportsReasoning(model)`：检测是否支持 reasoning_content（R1 模型 + V4 Pro 模型）
+- 推理模型：使用更大的上下文预算（`CONTEXT_BUDGET = 100_000`），不支持 temperature 参数
+- 聊天模型：使用标准预算（`CHAT_CONTEXT_BUDGET = 90_000`），支持全部参数
 
 ---
 
 ## 发布流程
 
-### 创建发布版本
-
-```bash
-npm version patch        # 更新版本号
-npm run build            # 构建
-npm test                 # 运行测试
-npm publish              # 发布到 npm
-git tag v$(node -p "require('./package.json').version")
-git push origin --tags   # 推送标签
-```
-
-### 版本约定
-
-- **补丁**（0.1.0 → 0.1.1）：Bug 修复、小改进
-- **次要**（0.1.0 → 0.2.0）：新功能，向后兼容
-- **主要**（0.x → 1.0.0）：破坏性变更，稳定版本
+1. 更新 `package.json` 中的版本号
+2. 运行 `npm run build` 确保编译通过
+3. 运行 `npm test` 确保测试通过
+4. 提交变更并打 tag：`git tag v<version>`
+5. 发布：`npm publish`
 
 ---
 
 ## 常见问题排查
 
-### 构建错误
-
-| 症状 | 可能原因 | 解决方案 |
+| 问题 | 可能原因 | 解决方法 |
 |---|---|---|
-| Cannot find module 'x' | 缺少依赖 | npm install |
-| Type error TS2304 | 缺少类型 | npm install -D @types/node |
-| Cannot use import statement outside a module | 缺少 "type": "module" | 检查 package.json 配置 |
-| 构建成功但运行时失败 | 模块解析不匹配 | 确保导入使用 .js 扩展名 |
-
-### 运行时错误
-
-| 症状 | 可能原因 | 解决方案 |
-|---|---|---|
-| No API key configured | 缺少 API 密钥 | 设置 DEEPSEEK_API_KEY 或运行设置向导 |
-| ECONNREFUSED | 网络/代理问题 | 检查网络，设置 CODEGRUNT_BASE_URL |
-| ETIMEDOUT | API 响应慢 | 增加超时或检查 API 状态 |
-| 工具执行挂起 | Shell 命令卡住 | 检查命令中是否有交互式提示 |
-
-### 开发技巧
-
-- 使用 console.error() 输出调试信息——输出到 stderr，不会干扰工具输出解析。
-- 频繁运行 npm run typecheck 尽早捕获类型错误。
-- 开发时使用 --noEmit 避免不完整的构建污染 dist/。
-
----
-
-## 贡献
-
-快速检查清单：
-
-1. Fork 仓库
-2. 创建功能分支：git checkout -b feat/your-feature
-3. 进行更改
-4. 运行测试：npm test
-5. 运行类型检查：npm run typecheck
-6. 使用约定式提交信息提交：feat: add xyz
-7. 推送并创建 Pull Request
-
----
-
-## 许可证
-
-MIT © CodeGrunt Contributors
+| `Error: No API key configured` | 未设置 `DEEPSEEK_API_KEY` | 运行 `codegrunt` 启动设置向导，或手动 `export DEEPSEEK_API_KEY=sk-...` |
+| 构建失败 | Node.js 版本过低 | 确保使用 Node.js 18+ |
+| 类型错误 | `node_modules` 过期 | 运行 `npm install` 重新安装依赖 |
+| `MODULE_NOT_FOUND` | 导入路径缺少 `.js` 扩展名 | ESM 要求导入使用 `.js` 后缀（TypeScript 约定） |
+| 工具调用无响应 | API 配额耗尽 | 检查 `/balance` 命令输出 |

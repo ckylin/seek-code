@@ -145,7 +145,7 @@ export class StreamResponseStage implements Stage {
     } catch (err) {
       if ((err as Error)?.name === 'AbortError' || ctx.signal?.aborted) {
         log.info('LLM stream aborted');
-        return { continue: false, done: true };
+        throw err;
       }
       log.error('LLM stream error', {
         error: err instanceof Error ? err.message : String(err),

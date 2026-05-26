@@ -16,36 +16,62 @@ export class PostProcessStage implements Stage {
   readonly name = 'post-process';
 
   async execute(ctx: PipelineContext): Promise<StageResult> {
-    const isTextOnly = ctx.finishReason === 'stop'
-      || (ctx.finishReason === 'length' && ctx.toolCalls.length === 0);
+    // Guard: if no finish chunk arrived but we have text and no tool calls,
+    // treat as 'stop' — some providers omit the finish event on short responses.
+    const effectiveReason = ctx.finishReason
+      ?? (ctx.toolCalls.length > 0 ? 'tool_calls' : 'stop');
 
-    if (isTextOnly) {
-      // Push final assistant text message
-      if (ctx.assistantText) {
-        ctx.messages.push({
-          role: 'assistant',
-          content: ctx.assistantText,
-          ...(ctx.reasoningText ? { reasoning_content: ctx.reasoningText } : {}),
-        });
-      }
+    if (ctx.finishReason === null) {
+      log.warn('No finish chunk received — inferred finish reason', { effectiveReason });
+    }
 
-      // Warn about truncation
-      if (ctx.finishReason === 'length') {
-        log.warn('Response truncated by token limit');
-      }
+    // ── Helper: push assistant text message (text-only turns) ────────────
+    // Note: when finishReason === 'tool_calls', ProcessToolCallsStage is
+    // responsible for pushing the assistant(tool_calls) message. This helper
+    // must NOT push it here — doing so creates a duplicate that causes the
+    // DeepSeek API to return 400 "insufficient tool messages".
+    const pushAssistantMessage = () => {
+      if (!ctx.assistantText) return;
+      ctx.messages.push({
+        role: 'assistant',
+        content: ctx.assistantText,
+        ...(ctx.reasoningText ? { reasoning_content: ctx.reasoningText } : {}),
+      });
+    };
 
-      log.debug('Turn complete — stop', { finishReason: ctx.finishReason });
+    // ── Stop — model finished naturally ──────────────────────────────────
+    if (effectiveReason === 'stop') {
+      pushAssistantMessage();
+      log.debug('Turn complete — stop', { finishReason: effectiveReason });
       return { continue: false, done: true };
     }
 
-    if (ctx.finishReason === 'tool_calls') {
-      // Continue loop — model will process tool results
-      log.debug('Turn continues — tool calls pending', { count: ctx.toolCalls.length });
+    // ── Length — truncated by token limit; save whatever we have ─────────
+    if (effectiveReason === 'length') {
+      pushAssistantMessage();
+      log.warn('Response truncated by token limit', {
+        savedTextLength: ctx.assistantText.length,
+        toolCallsDropped: ctx.toolCalls.length,
+      });
+      return { continue: false, done: true };
+    }
+
+    // ── Tool calls — more work needed; save text + tool_calls ────────────
+    if (effectiveReason === 'tool_calls') {
+      pushAssistantMessage();
+      log.debug('Turn continues — tool calls pending', {
+        count: ctx.toolCalls.length,
+        hasText: ctx.assistantText.length > 0,
+      });
       return { continue: true, done: false };
     }
 
-    // Unknown finish reason — stop gracefully
-    log.warn('Unknown finish reason — stopping', { finishReason: ctx.finishReason });
+    // ── Unknown — fallback; save text to avoid silent data loss ──────────
+    log.warn('Unknown finish reason — saving text and stopping', {
+      finishReason: effectiveReason,
+      textLength: ctx.assistantText.length,
+    });
+    pushAssistantMessage();
     return { continue: false, done: true };
   }
 }

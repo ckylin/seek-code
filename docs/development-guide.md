@@ -91,35 +91,58 @@ codegrunt/
 │   │   ├── input.ts          # Multiline input, tab completion, list selector
 │   │   ├── commands.ts       # Slash commands (/help, /model, /init, etc.)
 │   │   ├── setup.ts          # First-run setup wizard
+│   │   ├── init.ts           # /init command: codebase analysis + CODEGRUNT.md gen
 │   │   ├── skills.ts         # Skill loading and management
 │   │   ├── update.ts         # Version check and upgrade
 │   │   ├── banner.ts         # ASCII art banner
 │   │   └── at-resolver.ts    # @file/@url reference expansion
 │   ├── core/
 │   │   ├── agent/
-│   │   │   └── loop.ts       # Agentic loop — the core reasoning/action cycle
+│   │   │   ├── loop.ts       # Agent loop — P/G/E orchestration entry
+│   │   │   ├── intentor.ts   # Intent classifier (coding vs chat)
+│   │   │   ├── planner.ts    # Task planner (decomposes into multi-step plan)
+│   │   │   └── evaluator.ts  # Quality evaluator (output check + auto-refine)
+│   │   ├── pipeline/         # Harness-style pipeline engine
+│   │   │   ├── engine.ts     # PipelineEngine: stage executor
+│   │   │   ├── types.ts      # Pipeline context, stage interfaces, P/G/E types
+│   │   │   └── stages/
+│   │   │       ├── prepare-context.ts   # Build system prompt + inject project guide
+│   │   │       ├── stream-response.ts   # Stream LLM call + token accumulation
+│   │   │       ├── process-tools.ts     # Parse tool calls + execute + inject results
+│   │   │       ├── process-tools-helpers.ts  # yes-for-all session state
+│   │   │       └── post-process.ts      # Post-process: blind-write warnings, token stats
 │   │   ├── tools/
-│   │   │   ├── registry.ts   # Tool registration and lookup
-│   │   │   ├── executor.ts   # Tool execution with user confirmation
+│   │   │   ├── registry.ts   # Plugin-style ToolRegistry (runtime register/remove)
+│   │   │   ├── executor.ts   # Tool execution (diff confirm, param validation)
 │   │   │   ├── read_file.ts
 │   │   │   ├── write_file.ts
 │   │   │   ├── edit_file.ts
 │   │   │   ├── execute_shell.ts
 │   │   │   ├── list_directory.ts
 │   │   │   └── search_files.ts
-│   │   └── context/
-│   │       ├── manager.ts    # Context window management (token budget, trimming)
-│   │       └── project-guide.ts  # Load CODEGRUNT.md / CLAUDE.md project guides
+│   │   ├── context/
+│   │   │   ├── manager.ts    # Context window management (token budget, trimming)
+│   │   │   └── project-guide.ts  # Load CODEGRUNT.md / CLAUDE.md project guides
+│   │   ├── events/
+│   │   │   └── bus.ts        # Typed EventBus (pipeline/tool/LLM lifecycle events)
+│   │   ├── observability/
+│   │   │   ├── logger.ts     # Structured Logger (namespaces, levels, EventBus integration)
+│   │   │   └── metrics.ts    # Lightweight Metrics (counters, timers, snapshots)
+│   │   └── di/
+│   │       └── container.ts  # Service container/DI (singleton, transient, lifecycle)
 │   ├── providers/
 │   │   └── deepseek/
 │   │       ├── provider.ts   # DeepSeek LLM provider implementation
-│   │       └── client.ts     # OpenAI-compatible client factory
+│   │       └── client.ts     # OpenAI-compatible client factory + API key validation
 │   ├── utils/
-│   │   ├── display.ts        # Terminal output formatting
+│   │   ├── display.ts        # Terminal output formatting (plan, step, evaluation)
 │   │   ├── confirm.ts        # Diff preview and user confirmation
 │   │   ├── billing.ts        # Balance/usage querying and cost display
 │   │   ├── markdown.ts       # Streaming Markdown-to-terminal renderer
-│   │   └── interrupt.ts      # SIGINT handling
+│   │   ├── interrupt.ts      # SIGINT handling
+│   │   ├── select.ts         # Interactive list selector (arrow-key navigation)
+│   │   ├── constants.ts      # Shared constants
+│   │   └── rawMode.ts        # Raw terminal mode management
 │   ├── config.ts             # Configuration loading (env vars, config file)
 │   └── types.ts              # Shared TypeScript types and interfaces
 ├── tests/
@@ -150,31 +173,19 @@ npm run build          # Compile src/ → dist/
 npm run typecheck      # Type-check only, no output files
 ```
 
-The `tsconfig.json` configuration:
+Key tsconfig.json points:
 
-```json
-{
-  "compilerOptions": {
-    "target": "ES2022",          // Modern JS output
-    "module": "ESNext",          // ESM module system
-    "moduleResolution": "bundler", // Works with bundlers and tsx
-    "outDir": "dist",
-    "rootDir": "src",
-    "strict": true,              // Full strict mode
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "declaration": true,         // Generate .d.ts files
-    "sourceMap": true            // Debug source maps
-  },
-  "include": ["src"],
-  "exclude": ["node_modules", "dist", "tests"]
-}
-```
+- target: ES2022 — modern JS output
+- module: ESNext — ESM module system
+- moduleResolution: bundler — works with tsx and tsc
+- strict: true — full strict mode
+- declaration: true — generate .d.ts files
+- sourceMap: true — debug source maps
 
 Key points:
 
-- **ESM only**: The project uses `"type": "module"` in `package.json`. All imports use the `.js` extension convention (e.g., `import { foo } from './bar.js'`).
-- **`bundler` resolution**: This works with `tsx` for development and `tsc` for production. It does not require `exports` fields in `package.json` of dependencies.
+- **ESM only**: The project uses `"type": "module"` in `package.json`. All imports use the `.js` extension convention.
+- **`bundler` resolution**: Works with `tsx` for development and `tsc` for production.
 - **`declaration: true`**: Generates `.d.ts` type declaration files for consumers.
 
 ### Development vs Production
@@ -224,313 +235,6 @@ Run type checking separately to catch type errors without compiling:
 npm run typecheck
 ```
 
-### Linting
-
-Currently the project does not have a linter configured. Consider adding ESLint for larger contributions.
-
-### Debugging
-
-CodeGrunt offers multiple debugging approaches, from quick log printing to full IDE breakpoint debugging. The following are listed in recommended order.
-
----
-
-#### Method 1: VS Code Built-in Breakpoint Debugging (Highly Recommended)
-
-The project includes a pre-configured `.vscode/launch.json` — ready to use out of the box. Press `Ctrl+Shift+D` to open the Debug panel, select a configuration from the dropdown, and press `F5` to start.
-
-**5 Debug Configurations:**
-
-| Configuration | Purpose | Use Case |
-|---|---|---|
-| 🚀 Launch REPL (Interactive Mode) | Start interactive CLI in debug mode | Debug command handling, REPL UI, input completion |
-| 🔧 One-Shot Task Debug | Execute a single task then exit | Debug the full Agent loop, tool call chain |
-| 🧪 Debug Current Test File | Run and debug the currently open test file | Debug a specific tool's unit test |
-| 🧪 Debug All Tests | Run and debug all tests | Check overall test quality |
-| 🌐 Chrome DevTools Remote Debug | Start with `--inspect`, debug in Chrome | When you prefer browser DevTools |
-
-**Configuration file (`.vscode/launch.json`):**
-
-```json
-{
-  "version": "0.2.0",
-  "configurations": [
-    {
-      "name": "🚀 Launch REPL (Interactive Mode)",
-      "type": "node",
-      "request": "launch",
-      "runtimeArgs": ["--import", "tsx"],
-      "args": ["src/cli/index.ts"],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "🔧 One-Shot Task Debug",
-      "type": "node",
-      "request": "launch",
-      "runtimeArgs": ["--import", "tsx"],
-      "args": ["src/cli/index.ts", "list files in the current directory"],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "🧪 Debug Current Test File",
-      "type": "node",
-      "request": "launch",
-      "runtimeArgs": [
-        "--import", "tsx",
-        "${workspaceFolder}/node_modules/vitest/vitest.mjs"
-      ],
-      "args": ["run", "${relativeFile}"],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "🧪 Debug All Tests",
-      "type": "node",
-      "request": "launch",
-      "runtimeArgs": [
-        "--import", "tsx",
-        "${workspaceFolder}/node_modules/vitest/vitest.mjs"
-      ],
-      "args": ["run"],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "🌐 Chrome DevTools Remote Debug",
-      "type": "node",
-      "request": "launch",
-      "runtimeArgs": ["--inspect", "--import", "tsx"],
-      "args": ["src/cli/index.ts"],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}"
-    }
-  ]
-}
-```
-
-**Additional VS Code settings (`.vscode/settings.json`):**
-
-```json
-{
-  "typescript.tsdk": "node_modules/typescript/lib",
-  "typescript.enablePromptUseWorkspaceTsdk": true
-}
-```
-
-This ensures VS Code uses the project's installed TypeScript version, avoiding type-check inconsistencies.
-
----
-
-#### Method 2: Chrome DevTools Remote Debugging
-
-If you prefer Chrome's browser developer tools, start with:
-
-```bash
-# Start with --inspect flag from the terminal
-node --inspect --import tsx src/cli/index.ts
-```
-
-Then open `chrome://inspect` in Chrome and click **"Open dedicated DevTools for Node"**. A dedicated DevTools window will open where you can:
-
-- Set breakpoints on TypeScript source in the Sources panel
-- Execute expressions in the Console panel
-- View the call stack, variables, and scope
-
-> **Note**: `tsconfig.json` already has `"sourceMap": true` enabled, so Source Maps automatically map compiled JS back to TypeScript source.
-
----
-
-#### Method 3: console.error Log Debugging (Fastest)
-
-Since CodeGrunt's tool output is communicated via **stdout**, **never use `console.log()`** — it will pollute tool output and break parsing.
-
-```typescript
-// ✅ Correct: outputs to stderr, doesn't affect tool output
-console.error('[DEBUG] params:', params);
-console.error('[DEBUG] state:', JSON.stringify(state, null, 2));
-
-// ❌ Wrong: outputs to stdout, breaks tool output
-console.log('[DEBUG] params:', params);
-```
-
----
-
-#### Method 4: Development Hot-Reload Mode
-
-When you don't need full breakpoint debugging, watch mode is the fastest approach:
-
-```bash
-npm run dev
-```
-
-The program auto-restarts every time you save a file under `src/`. Combine with `console.error` logs for fast iteration.
-
----
-
-#### Module Breakpoint Location Quick Reference
-
-Based on what you want to debug, set breakpoints at the corresponding file and location:
-
-| Debug Target | Key File | Recommended Breakpoint Location |
-|---|---|---|
-| **REPL startup flow** | `src/cli/repl.ts` | `startRepl()` function entry (~line 15) |
-| **User input handling** | `src/cli/input.ts` | `question()` function (~line 80) |
-| **Multi-line input parsing** | `src/cli/input.ts` | `isInputTuple()` return statement |
-| **@-reference resolution** | `src/cli/at-resolver.ts` | `resolveAtReferences()` function entry |
-| **Slash command dispatch** | `src/cli/commands.ts` | `handleSlashCommand()` switch statement |
-| **Agent Loop — message building** | `src/core/agent/loop.ts` | `messages.push()` call in `runAgentLoop()` |
-| **Agent Loop — LLM call** | `src/core/agent/loop.ts` | `provider.stream()` call site |
-| **Agent Loop — tool call parsing** | `src/core/agent/loop.ts` | After `toolCalls` variable assignment |
-| **Agent Loop — result return** | `src/core/agent/loop.ts` | `finalResponse` assignment |
-| **Tool registration** | `src/core/tools/registry.ts` | `getTool()` call site |
-| **Tool execution — parameter validation** | `src/core/tools/executor.ts` | `executeToolCall()` function entry |
-| **Tool execution — confirmation prompt** | `src/core/tools/executor.ts` | `confirm()` call site |
-| **Tool execution — result construction** | `src/core/tools/executor.ts` | `return` statement |
-| **read_file tool** | `src/core/tools/read_file.ts` | `execute()` function entry |
-| **write_file tool** | `src/core/tools/write_file.ts` | `execute()` entry, before `writeFile()` |
-| **edit_file tool** | `src/core/tools/edit_file.ts` | String match replacement logic |
-| **execute_shell tool** | `src/core/tools/execute_shell.ts` | Before/after `exec()` call |
-| **LLM request sending** | `src/providers/deepseek/provider.ts` | `stream()` method entry |
-| **LLM stream response handling** | `src/providers/deepseek/provider.ts` | Inside `for await` loop |
-| **Token usage stats** | `src/providers/deepseek/provider.ts` | `usage` object construction |
-| **Context trimming** | `src/core/context/manager.ts` | `trim()` method |
-| **Project guide loading** | `src/core/context/project-guide.ts` | `loadProjectGuide()` function |
-| **Configuration loading** | `src/config.ts` | `loadConfig()` function |
-| **Cost/balance query** | `src/utils/billing.ts` | `fetchBalance()` function |
-| **Diff preview** | `src/utils/confirm.ts` | `confirm()` function |
-
----
-
-#### Hands-On: 5 Debugging Scenario Walkthroughs
-
-##### Scenario A: Debug REPL Startup and UI Interaction
-
-1. Open the project in VS Code
-2. Press `Ctrl+Shift+D` to switch to the Debug panel
-3. Select **"🚀 Launch REPL (Interactive Mode)"** from the dropdown
-4. Set a breakpoint at the `handleSlashCommand()` function entry in `src/cli/commands.ts` (press `F9`)
-5. Press `F5` to start debugging
-6. The program starts and the REPL shows a prompt in the integrated terminal
-7. Type `/help` and press Enter in the terminal
-8. The breakpoint triggers, you can:
-   - Press `F10` to Step Over
-   - Press `F11` to Step Into
-   - Hover over variables to inspect values
-   - Check the full scope in the Variables panel
-9. Continue execution (`F5`) and observe the `/help` output
-
-##### Scenario B: Debug a Complete Conversation Flow
-
-1. Select **"🔧 One-Shot Task Debug"**
-2. Set breakpoints in `runAgentLoop()` in `src/core/agent/loop.ts` at these locations:
-   - Function entry (inspect parameters)
-   - After `messages.push(userMessage)` (inspect message construction)
-   - At `provider.stream()` call (inspect LLM request)
-   - After `toolCalls` parsing (inspect tool calls)
-   - At `finalResponse` assignment (inspect final result)
-3. Press `F5` to start
-4. At each breakpoint, check:
-   - Whether the message list is correct (system + user)
-   - Whether the LLM request parameters are complete
-   - Whether tool call parameters match their definitions
-   - Whether the final response matches expectations
-5. Note: task execution requires an API key and will incur costs
-
-##### Scenario C: Debug a Specific Tool (Zero API Cost)
-
-1. Open the test file to debug, e.g. `tests/tools/read_file.test.ts`
-2. Select **"🧪 Debug Current Test File"**
-3. Set a breakpoint at the `execute()` entry of the corresponding tool source (e.g. `src/core/tools/read_file.ts`)
-4. Press `F5` — when the breakpoint triggers, you can single-step through the complete tool logic
-5. This is the most recommended approach: **zero API cost + rapid validation**
-
-##### Scenario D: Debug Context Trimming Logic
-
-1. Select **"🔧 One-Shot Task Debug"**
-2. Set a breakpoint at the `trim()` method in `src/core/context/manager.ts`
-3. Also set a breakpoint at the `addMessage()` method
-4. After launching, observe the token estimates and trimming behavior each time a message is added
-5. Use the debug console to run `messages.map(m => m.role)` to inspect message role distribution
-
-##### Scenario E: Debug with Chrome DevTools
-
-1. Select **"🌐 Chrome DevTools Remote Debug"**
-2. Press `F5` to start
-3. Open Chrome and go to `chrome://inspect`
-4. Click "Open dedicated DevTools for Node"
-5. In Sources panel → Filesystem → add the project folder
-6. Navigate to TypeScript files under `src/`, click line numbers to set breakpoints
-7. Enter commands in the REPL to trigger breakpoints
-
----
-
-#### console.error Debug Log Templates
-
-Paste the following code into the function you need to debug:
-
-```typescript
-// === Generic Debug Template ===
-console.error('========================================');
-console.error('[DEBUG] Function:', 'functionName');
-console.error('[DEBUG] Params:', JSON.stringify(params, null, 2));
-console.error('[DEBUG] Stack:', new Error().stack?.split('\n').slice(2, 6).join('\n'));
-console.error('========================================');
-
-// === Agent Loop Specific ===
-console.error('[Loop] iteration: %d, messages: %d, token usage: %d',
-  iteration, messages.length, currentUsage.totalTokens);
-
-// === Tool Execution Specific ===
-console.error('[Tool] %s called, args: %o', toolName, args);
-console.error('[Tool] result success=%s, output length=%d',
-  result.success, result.output?.length);
-
-// === Provider Specific ===
-console.error('[Provider] request → model=%s, messages=%d, tools=%d',
-  options.model, messages.length, options.tools?.length ?? 0);
-
-// === Context Management Specific ===
-console.error('[Context] token estimate: %d / budget: %d (%.1f%%)',
-  estimatedTokens, budget, (estimatedTokens / budget) * 100);
-```
-
----
-
-#### Common Debugging Issues Quick Reference
-
-| Symptom | Likely Cause | Troubleshooting Steps |
-|---|---|---|
-| LLM returns empty response | Invalid API key or network unreachable | 1. `console.error` the API response status code 2. Check for exceptions thrown in `provider.ts` stream() |
-| Tool call fails | Parameter format doesn't match schema | 1. Add `console.error` at `executor.ts` entry 2. Compare tool definition vs LLM-provided args |
-| Context unexpectedly trimmed | Token estimate too high | 1. Add logs in `manager.ts` trim() 2. Check estimation ratio (currently 4 chars/token) |
-| Streaming output stutters | Iterator not yielding correctly | 1. Add `console.error` in `provider.ts` for await loop 2. Check each chunk is yielded promptly |
-| Slash command not working | Command parsing error | 1. Set breakpoint in `commands.ts` handleSlashCommand 2. Check the returned discriminated union type |
-| Type errors | Type definition mismatch | Run `npm run typecheck` for complete error list |
-| Build succeeds but behavior is wrong | Compiled output differs from source | 1. Inspect `dist/` output 2. Verify `.js` extension imports are correct |
-| Breakpoints not hitting | Source Map not mapping correctly | 1. Confirm `tsconfig.json` has `"sourceMap": true` 2. Clear `dist/` and rebuild |
-| Vitest debugging not working | vitest.mjs path issue | Ensure `${workspaceFolder}/node_modules/vitest/vitest.mjs` path is used |
-
----
-
-#### Using Tests for Debugging
-
-Writing or running tests is the most reliable way to verify tool behavior:
-
-```bash
-# Run a single test file for quick verification
-npx vitest run tests/tools/read_file.test.ts
-
-# Use --reporter=verbose for detailed output
-npx vitest --reporter=verbose
-
-# Use watch mode to auto-rerun tests on code changes
-npx vitest
-
-# Run only tests matching a name pattern
-npx vitest run -t "reads an existing file"
-```
-
 ---
 
 ## Testing
@@ -553,44 +257,15 @@ npx vitest run tests/tools/execute_shell.test.ts
 
 > **Note:** Currently only 3 of the 6 tools have test files. Tests for `edit_file`, `list_directory`, and `search_files` are not yet implemented. Contributions adding these tests are welcome!
 
-### Verbose Output
-
-```bash
-npx vitest --reporter=verbose
-```
-
 ### Test Structure
 
 Tests are located in `tests/` and mirror the `src/` structure. The test framework is [Vitest](https://vitest.dev/), configured in `vitest.config.ts`.
 
 Key characteristics:
 
-- **No API key required**: Tool-level unit tests operate on the local filesystem and shell, not against any LLM.
+- **No API key required**: Tool-level unit tests operate on the local filesystem and shell.
 - **Isolated filesystem**: Tests use temporary directories to avoid side effects.
 - **Async tests**: Most tool tests are async since they interact with I/O.
-
-### Writing Tests
-
-Example test structure:
-
-```typescript
-import { describe, it, expect } from 'vitest';
-import { readFileTool } from '../../src/core/tools/read_file.js';
-
-describe('read_file', () => {
-  it('reads an existing file', async () => {
-    const result = await readFileTool.execute({ path: 'package.json' });
-    expect(result.success).toBe(true);
-    expect(result.output).toContain('"name": "codegrunt"');
-  });
-
-  it('returns error for non-existent file', async () => {
-    const result = await readFileTool.execute({ path: 'nonexistent.txt' });
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Failed to read');
-  });
-});
-```
 
 ---
 
@@ -602,46 +277,54 @@ describe('read_file', () => {
 User Input (CLI / REPL)
        │
        ▼
-  ┌─────────────┐
-  │  Agent Loop  │ ◄──── LLM Provider (streaming)
-  │  (loop.ts)   │ ────► Tool Execution
-  └──────┬──────┘
+  ┌──────────────┐
+  │   Intentor   │  Intent classification: coding → P/G/E; chat → direct gen
+  └──────┬───────┘
          │
-    ┌────┴────┐
-    │  Tools  │
-    │ (6 impl)│
+    ┌────▼─────────────────────────────────────┐
+    │  Planner → Generator → Evaluator          │
+    │   Plan       Execute     Evaluate          │
+    │     (auto-refine on eval failure)          │
+    └──────────────────────────────────────────┘
+         │
+    ┌────▼──────────┐
+    │  Pipeline      │  5 stages: prepare→stream→tools→post-process
+    │  Engine        │
+    └───────────────┘
+         │
+    ┌────▼────┐
+    │  Tools  │  6 built-in + plugin registry
+    │ (6+)    │
     └─────────┘
 ```
 
 ### Agent Loop (`src/core/agent/loop.ts`)
 
-The agent loop is the heart of CodeGrunt. It follows a **ReAct** (Reasoning + Acting) pattern:
+The agent loop uses a **P/G/E (Planner / Generator / Evaluator) + Intentor** architecture:
 
-1. **System prompt** is constructed once per session (stable for prompt cache hits).
-2. **User message** is appended with `[cwd]` and `[date]` prefix.
-3. **Stream response** from the LLM — handles text deltas, reasoning deltas, and tool call deltas.
-4. **If tool calls** are received, execute each tool and feed results back to the LLM.
-5. **If text response** (finish_reason = "stop"), output to user and end.
-6. **Loop** up to 30 iterations to handle multi-step tasks.
+**Phase 0 — Intentor**: Classifies the task as coding (multi-step plan needed) or chat (direct response).
+
+**Coding Flow — P/G/E Pipeline**:
+1. **Planner**: Decomposes complex tasks into 2-5 independently verifiable steps, using low-temperature (0.1) structured JSON output
+2. **Generator**: Pipeline engine executes each step sequentially → prepare context → stream LLM call → tool execution → post-process
+3. **Evaluator**: Checks output quality / plan adherence / hallucinations. If it fails, injects feedback and retries (max 2x)
+4. On max retries exhausted, continues to next step — never deadlocks
+
+**Chat Flow**: Skips Planner/Evaluator, uses Generator pipeline iteratively until model stops.
 
 Key design decisions:
 
-- **System prompt stability**: The system prompt is built once and never changes during a session. This maximizes prompt cache hit rates on DeepSeek (and other providers that support prompt caching).
-- **Context management**: The `ContextManager` tracks token usage and trims old messages when the budget is exceeded, always preserving the system message and the most recent user message.
-- **Streaming-first**: All LLM communication is streaming via `AsyncIterable<StreamChunk>`, enabling real-time output to the terminal.
+- **System prompt stability**: Built once per session, never changes. Maximizes DeepSeek prompt cache hit rates.
+- **Pipeline architecture**: Inspired by Harness CI/CD, 5 independently testable stages sharing a `PipelineContext`
+- **EventBus**: All lifecycle events (pipeline start/complete, tool calls, LLM usage) published via typed EventBus
+- **DI Container**: Services registered/resolved via `ServiceContainer`, supporting singleton and transient lifecycles
+- **Streaming-first**: All LLM communication via `AsyncIterable<StreamChunk>` for real-time terminal output
 
 ### Tool System
 
-Tools are the mechanism by which the LLM interacts with the user's environment. Each tool implements the `Tool` interface:
+Tools are how the LLM interacts with the user's environment. Each tool implements the `Tool` interface and is registered via the plugin-style `ToolRegistry` (supports runtime dynamic add/remove).
 
-```typescript
-interface Tool {
-  definition: ToolDefinition;  // OpenAI-compatible function definition
-  execute(args: Record<string, unknown>): Promise<ToolResult>;
-}
-```
-
-The six built-in tools:
+Six built-in tools:
 
 | Tool | Description |
 |---|---|
@@ -652,7 +335,21 @@ The six built-in tools:
 | `list_directory` | List directory tree with configurable depth |
 | `search_files` | Search for text patterns in files |
 
-**Safety**: Before destructive operations (`write_file`, `edit_file`, `execute_shell`), the executor shows a diff preview and asks for user confirmation.
+**Safety**: Before destructive operations, the executor shows a diff preview and asks for user confirmation with three options: Yes, Yes for all (session), No.
+
+### Pipeline Engine (`src/core/pipeline/`)
+
+Inspired by Harness CI/CD pipelines, each agent interaction is decomposed into 5 independent stages:
+
+| Stage | File | Responsibility |
+|---|---|---|
+| PrepareContext | `prepare-context.ts` | Build system prompt, inject project guide, init messages |
+| StreamResponse | `stream-response.ts` | Stream LLM call, accumulate text/reasoning/tool calls |
+| ProcessToolCalls | `process-tools.ts` | Parse tool calls, execute via executor, inject results |
+| ProcessToolHelpers | `process-tools-helpers.ts` | yes-for-all session-level state management |
+| PostProcess | `post-process.ts` | Blind-write detection, token stats, final output formatting |
+
+All stages share a `PipelineContext`, executed sequentially by `PipelineEngine`.
 
 ### Context Management (`src/core/context/manager.ts`)
 
@@ -660,25 +357,22 @@ The `ContextManager` maintains the conversation history:
 
 - **Token estimation**: Uses a simple 4:1 character-to-token ratio.
 - **Trimming**: When the estimated token count exceeds the budget, oldest non-system messages are removed.
-- **Budget**: Defaults to 90,000 tokens for chat models (128K context minus output room); 100,000 for reasoner models (1M context window).
+- **Budget**: Defaults to 90,000 tokens for chat models; 100,000 for reasoner models (1M context window).
 
 ### Provider System
 
-All LLM backends implement the `LLMProvider` interface:
-
-```typescript
-interface LLMProvider {
-  readonly id: string;
-  stream(messages: Message[], options: RequestOptions): AsyncIterable<StreamChunk>;
-}
-```
-
-The `StreamChunk` union type supports:
+All LLM backends implement the `LLMProvider` interface. The `StreamChunk` union type supports:
 
 - `text_delta` — incremental text output
 - `reasoning_delta` — chain-of-thought reasoning (displayed as "Thinking...")
 - `tool_call_delta` — streaming tool call arguments
 - `finish` — end-of-stream with finish reason
+
+### Observability
+
+- **Logger** (`observability/logger.ts`): Structured leveled logging with namespace support, errors auto-published to EventBus
+- **Metrics** (`observability/metrics.ts`): Counters/timers/snapshots with telemetry summary output
+- **EventBus** (`events/bus.ts`): Typed event bus covering all lifecycle events (pipeline, tools, LLM, conversation)
 
 ---
 
@@ -700,18 +394,11 @@ export class MyProvider implements LLMProvider {
   readonly id = 'my-provider';
 
   async *stream(messages: Message[], options: RequestOptions): AsyncIterable<StreamChunk> {
-    // 1. Transform messages to your API format
-    // 2. Make streaming API call
-    // 3. Yield StreamChunk values as the response arrives
-    // 4. Yield a finish chunk when done
-
     for await (const chunk of yourApiCall(messages, options)) {
       if (chunk.type === 'text') {
         yield { type: 'text_delta', text: chunk.content };
       }
-      // ... handle other chunk types
     }
-
     yield { type: 'finish', finish_reason: 'stop' };
   }
 }
@@ -719,25 +406,23 @@ export class MyProvider implements LLMProvider {
 
 ### Step 3: Register the Provider
 
-In `src/cli/index.ts` or through the configuration system:
+In `src/cli/index.ts`:
 
 ```typescript
 import { MyProvider } from './providers/myprovider/provider.js';
-
-// In the action handler:
 const provider = new MyProvider(config);
 ```
 
 ### Step 4: Add Configuration Support
 
-Update `src/config.ts` to support your provider's configuration (API key env var, base URL, etc.).
+Update `src/config.ts` to support your provider's configuration.
 
 ### Provider Contract
 
 Your provider must:
 
 1. Accept `Message[]` in OpenAI-compatible format
-2. Return an `AsyncIterable<StreamChunk>`
+2. Return `AsyncIterable<StreamChunk>`
 3. Support `AbortSignal` for cancellation
 4. Handle tool definitions (passed via `options.tools`)
 5. Respect `options.model`, `options.maxTokens`, `options.temperature`
@@ -761,10 +446,7 @@ export const myTool: Tool = {
       parameters: {
         type: 'object',
         properties: {
-          param1: {
-            type: 'string',
-            description: 'Description of param1',
-          },
+          param1: { type: 'string', description: 'Description of param1' },
         },
         required: ['param1'],
       },
@@ -773,7 +455,6 @@ export const myTool: Tool = {
 
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
     try {
-      // Your implementation
       return { success: true, output: 'Result string' };
     } catch (err) {
       return {
@@ -788,25 +469,16 @@ export const myTool: Tool = {
 
 ### Step 2: Register the Tool
 
-Add your tool to `src/core/tools/registry.ts`:
+Add to `src/core/tools/registry.ts` in the `ToolRegistry.registerBuiltins()` method:
 
 ```typescript
 import { myTool } from './my_tool.js';
-
-const ALL_TOOLS: Tool[] = [
-  readFileTool,
-  writeFileTool,
-  editFileTool,
-  executeShellTool,
-  listDirectoryTool,
-  searchFilesTool,
-  myTool,  // ← Add here
-];
+// Add myTool to the builtins array in registerBuiltins()
 ```
 
 ### Step 3: Add Safety Confirmation (if destructive)
 
-If your tool modifies the filesystem, add confirmation logic in `src/core/tools/executor.ts` similar to `edit_file` and `write_file`.
+Add confirmation logic in `src/core/tools/executor.ts` (follow the `edit_file`/`write_file` pattern).
 
 ### Step 4: Write Tests
 
@@ -827,7 +499,7 @@ describe('my_tool', () => {
 
 ## Slash Commands
 
-CodeGrunt provides a set of slash commands available in the interactive REPL. These are implemented in `src/cli/commands.ts`.
+CodeGrunt provides a set of slash commands available in the interactive REPL, implemented in `src/cli/commands.ts`.
 
 | Command | Description |
 |---|---|
@@ -843,266 +515,76 @@ CodeGrunt provides a set of slash commands available in the interactive REPL. Th
 | `/reasoning` / `/effort` | Set reasoning effort for R1 models (low/medium/high) |
 | `/token` | Update your DeepSeek API key |
 | `/skills` | List and manage skills (create, list) |
-| `/exit` | Exit the REPL |
+| `/exit` | Exit CodeGrunt |
 
 ---
 
 ## @-Reference Syntax
 
-CodeGrunt supports `@`-references in the REPL and one-shot mode, implemented in `src/cli/at-resolver.ts`. This lets you reference files and URLs directly in your prompt.
+CodeGrunt supports `@`-references in both REPL and one-shot mode, implemented in `src/cli/at-resolver.ts`.
 
 ### File References
 
 ```bash
-# Reference a file — its content is inlined into the prompt
 codegrunt "explain @src/core/agent/loop.ts"
-
-# Reference multiple files
 codegrunt "compare @src/config.ts and @src/types.ts"
-
-# Reference with line numbers (if supported by the resolver)
-codegrunt "fix the bug in @src/cli/index.ts:42-56"
 ```
 
 ### URL References
 
 ```bash
-# Reference a URL — its content is fetched and inlined
 codegrunt "summarize @https://example.com/docs/api"
 ```
-
-### How It Works
-
-When the input contains `@<path>` or `@<url>`, the `at-resolver.ts` module:
-
-1. Detects `@` tokens in the input string
-2. For file paths: reads the file content and replaces `@path` with the file content, prefixed by the filename
-3. For URLs: fetches the URL content and inlines it
-4. The expanded content is sent to the LLM as part of the user message
-
-This is especially useful for providing context without manually copying file contents.
-
----
-
-## First-Run Setup Wizard
-
-When CodeGrunt is started for the first time without a configured API key, it runs the setup wizard (`src/cli/setup.ts`).
-
-### What It Does
-
-1. **Detects missing configuration** — checks if `DEEPSEEK_API_KEY` is set or `~/.codegrunt/config.json` exists
-2. **Prompts for API key** — asks the user to enter their DeepSeek API key
-3. **Model selection** — lets user choose from available DeepSeek models
-4. **Saves configuration** — writes to `~/.codegrunt/config.json`
-5. **Verifies the key** — makes a test API call to confirm the key works
-
-### Skipping the Wizard
-
-You can skip the wizard by pre-configuring:
-
-```bash
-export DEEPSEEK_API_KEY=sk-xxxxxxxx
-# or create ~/.codegrunt/config.json manually
-```
-
----
-
-## Project Guide System
-
-CodeGrunt automatically loads project-level guidance from `CODEGRUNT.md` or `CLAUDE.md` files in the project root, implemented in `src/core/context/project-guide.ts`.
-
-### How It Works
-
-1. On startup, CodeGrunt looks for `CODEGRUNT.md` or `CLAUDE.md` in the current working directory
-2. If found, the file content is prepended to the system prompt
-3. This allows each project to define custom instructions for the AI assistant
-
-### Example `CODEGRUNT.md`
-
-```markdown
-# CODEGRUNT.md
-
-This file provides guidance to CodeGrunt when working with this project.
-
-## Commands
-npm run test        # run tests
-npm run lint        # run linter
-npm run build       # compile
-
-## Conventions
-- Use functional components in React
-- Prefer named exports over default exports
-- Write tests for all new features
-```
-
-### Priority
-
-If both `CODEGRUNT.md` and `CLAUDE.md` exist, `CODEGRUNT.md` takes precedence.
 
 ---
 
 ## Configuration System
 
-### Configuration Sources (in priority order)
+CodeGrunt's config loading chain (highest to lowest priority):
 
-1. **Environment variables** (highest priority)
-2. **`~/.codegrunt/config.json`** (user config file)
-3. **Hardcoded defaults** (lowest priority)
+1. Environment variables (e.g., `CODEGRUNT_MODEL`)
+2. `~/.codegrunt/config.json` config file
+3. Hardcoded defaults (`DEFAULTS` in `src/config.ts`)
 
-### Environment Variables
+### Key Config Items
 
-| Variable | Description | Default |
+| Config | Env Variable | Default |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | DeepSeek API key | — |
-| `CODEGRUNT_MODEL` | Model ID | `deepseek-v4-pro` |
-| `CODEGRUNT_PROVIDER` | Provider ID | `deepseek` |
-| `CODEGRUNT_MAX_TOKENS` | Max tokens per response | `8192` |
-| `CODEGRUNT_TEMPERATURE` | Temperature (0-2) | `0.2` |
-| `CODEGRUNT_BASE_URL` | API base URL | `https://api.deepseek.com` |
-| `CODEGRUNT_REASONING_EFFORT` | R1 reasoning effort: `low` \| `medium` \| `high` | `medium` |
-| `CODEGRUNT_TOP_P` | Nucleus sampling (0-1) | `1` |
-| `CODEGRUNT_FREQUENCY_PENALTY` | Repetition penalty (-2 to 2) | `0` |
-| `CODEGRUNT_PRESENCE_PENALTY` | Topic diversity penalty (-2 to 2) | `0` |
+| API Key | `DEEPSEEK_API_KEY` | — |
+| Model | `CODEGRUNT_MODEL` | `deepseek-v4-pro` |
+| Max Tokens | `CODEGRUNT_MAX_TOKENS` | `8192` |
+| Temperature | `CODEGRUNT_TEMPERATURE` | `0.2` |
+| Reasoning Effort | `CODEGRUNT_REASONING_EFFORT` | `medium` |
+| Top-P | `CODEGRUNT_TOP_P` | `1` |
+| Frequency Penalty | `CODEGRUNT_FREQUENCY_PENALTY` | `0` |
+| Presence Penalty | `CODEGRUNT_PRESENCE_PENALTY` | `0` |
+| Base URL | `CODEGRUNT_BASE_URL` | `https://api.deepseek.com` |
 
-### Config File Location
+### Model Detection (`src/config.ts`)
 
-`~/.codegrunt/config.json`
-
-```json
-{
-  "apiKey": "sk-...",
-  "model": "deepseek-v4-pro",
-  "maxTokens": 8192,
-  "temperature": 0.2,
-  "provider": "deepseek",
-  "baseURL": "https://api.deepseek.com",
-  "reasoningEffort": "medium",
-  "topP": 1,
-  "frequencyPenalty": 0,
-  "presencePenalty": 0
-}
-```
-
-### How Configuration is Loaded
-
-See `src/config.ts`:
-
-```typescript
-export async function loadConfig(): Promise<CodeGruntConfig> {
-  const fileConfig = await loadConfigFile();  // reads ~/.codegrunt/config.json
-
-  return {
-    provider: process.env.CODEGRUNT_PROVIDER ?? fileConfig.provider ?? DEFAULTS.provider,
-    model: process.env.CODEGRUNT_MODEL ?? fileConfig.model ?? DEFAULTS.model,
-    maxTokens: process.env.CODEGRUNT_MAX_TOKENS
-      ? parseInt(process.env.CODEGRUNT_MAX_TOKENS, 10)
-      : (fileConfig.maxTokens ?? DEFAULTS.maxTokens),
-    temperature: process.env.CODEGRUNT_TEMPERATURE
-      ? parseFloat(process.env.CODEGRUNT_TEMPERATURE)
-      : (fileConfig.temperature ?? DEFAULTS.temperature),
-    apiKey: process.env.DEEPSEEK_API_KEY ?? fileConfig.apiKey ?? '',
-    baseURL: process.env.CODEGRUNT_BASE_URL ?? fileConfig.baseURL ?? DEFAULTS.baseURL,
-    reasoningEffort: (process.env.CODEGRUNT_REASONING_EFFORT as 'low' | 'medium' | 'high')
-      ?? fileConfig.reasoningEffort
-      ?? DEFAULTS.reasoningEffort,
-    topP: process.env.CODEGRUNT_TOP_P
-      ? parseFloat(process.env.CODEGRUNT_TOP_P)
-      : (fileConfig.topP ?? DEFAULTS.topP),
-    frequencyPenalty: process.env.CODEGRUNT_FREQUENCY_PENALTY
-      ? parseFloat(process.env.CODEGRUNT_FREQUENCY_PENALTY)
-      : (fileConfig.frequencyPenalty ?? DEFAULTS.frequencyPenalty),
-    presencePenalty: process.env.CODEGRUNT_PRESENCE_PENALTY
-      ? parseFloat(process.env.CODEGRUNT_PRESENCE_PENALTY)
-      : (fileConfig.presencePenalty ?? DEFAULTS.presencePenalty),
-  };
-}
-```
+- `isReasonerModel(model)`: Detects R1 reasoner models (ID contains `reasoner` or `r1`)
+- `supportsReasoning(model)`: Detects reasoning_content support (R1 models + V4 Pro)
+- Reasoner models: larger context budget (`CONTEXT_BUDGET = 100_000`), no temperature support
+- Chat models: standard budget (`CHAT_CONTEXT_BUDGET = 90_000`), full parameter support
 
 ---
 
 ## Release Process
 
-### Creating a Release
-
-1. **Update version** in `package.json`:
-   ```bash
-   npm version patch  # or minor, or major
-   ```
-
-2. **Build**:
-   ```bash
-   npm run build
-   ```
-
-3. **Run tests**:
-   ```bash
-   npm test
-   ```
-
-4. **Publish to npm**:
-   ```bash
-   npm publish
-   ```
-
-5. **Tag in Git**:
-   ```bash
-   git tag v$(node -p "require('./package.json').version")
-   git push origin --tags
-   ```
-
-### Version Convention
-
-- **Patch** (0.1.0 → 0.1.1): Bug fixes, small improvements
-- **Minor** (0.1.0 → 0.2.0): New features, backward-compatible
-- **Major** (0.x → 1.0.0): Breaking changes, stable release
+1. Bump version in `package.json`
+2. Run `npm run build` to verify compilation
+3. Run `npm test` to verify tests pass
+4. Commit changes and tag: `git tag v<version>`
+5. Publish: `npm publish`
 
 ---
 
 ## Troubleshooting
 
-### Build Errors
-
-| Symptom | Likely Cause | Solution |
+| Issue | Likely Cause | Solution |
 |---|---|---|
-| `Cannot find module 'x'` | Missing dependency | `npm install` |
-| `Type error TS2304: Cannot find name` | Missing type | `npm install -D @types/node` |
-| `Cannot use import statement outside a module` | Missing `"type": "module"` | Check `package.json` has `"type": "module"` |
-| Build succeeds but runtime fails | Module resolution mismatch | Ensure imports use `.js` extension |
-
-### Runtime Errors
-
-| Symptom | Likely Cause | Solution |
-|---|---|---|
-| `No API key configured` | Missing API key | Set `DEEPSEEK_API_KEY` env var or run setup |
-| `ECONNREFUSED` | Network/proxy issue | Check network, set `CODEGRUNT_BASE_URL` |
-| `ETIMEDOUT` | Slow API response | Increase timeout or check API status |
-| Tool execution hangs | Shell command stuck | Check for interactive prompts in commands |
-
-### Development Tips
-
-- **Use `console.error()`** for debug output — it goes to stderr and won't interfere with tool output parsing.
-- **Check the `dist/` output** if you're unsure about compilation: `cat dist/core/tools/read_file.js`
-- **Run `npm run typecheck`** frequently to catch type errors early.
-- **Use `--noEmit`** during development to avoid cluttering `dist/` with incomplete builds.
-
----
-
-## Contributing
-
-See [CONTRIBUTING.md](./contributing.md) for detailed contribution guidelines.
-
-Quick checklist:
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feat/your-feature`
-3. Make your changes
-4. Run tests: `npm test`
-5. Run type check: `npm run typecheck`
-6. Commit with conventional commit message: `feat: add xyz`
-7. Push and open a Pull Request
-
----
-
-## License
-
-MIT © CodeGrunt Contributors
+| `Error: No API key configured` | `DEEPSEEK_API_KEY` not set | Run `codegrunt` to launch setup wizard, or `export DEEPSEEK_API_KEY=sk-...` |
+| Build fails | Node.js version too old | Ensure Node.js 18+ |
+| Type errors | Stale `node_modules` | Run `npm install` |
+| `MODULE_NOT_FOUND` | Missing `.js` extension in import | ESM requires `.js` suffix in imports |
+| Tool calls unresponsive | API quota exhausted | Check `/balance` command output |

@@ -24,7 +24,7 @@ const CODE_PATTERNS: [RegExp, number][] = [
   // ── Standalone strong verbs ───────────────────────────────────────────
   [/\bimplement\b/i, 3],
   [/\bdebug\b/i, 3],
-  [/\bdeploy\b/i, 3],
+  [/\bdeploy\b/i, 5],  // weight 5 so single-word "deploy" (len 6) survives -2 short-text penalty → score 3
   [/\bpatch\b/i, 3],
 
   // ── Code-writing phrases ──────────────────────────────────────────────
@@ -46,19 +46,20 @@ const CODE_PATTERNS: [RegExp, number][] = [
   [/\bpip\s+install\b/i, 3],
 
   // ── Chinese equivalents (no \b — CJK chars don't have word boundaries) ─
-  [/(写|创建|实现|编写|生成).{0,6}(函数|类|代码|脚本|程序|测试|文件|模块|组件|接口)/g, 5],
-  [/(帮我写|帮我实现|帮我做|帮我弄)/g, 4],
-  [/写个/g, 4],
-  [/创建个/g, 4],
-  [/实现个/g, 4],
-  [/重构/g, 4],
-  [/(修复|改|修改).{0,6}(bug|代码|问题|错误)/g, 4],
-  [/(?:(?<!修)修复|修复(?!复))/g, 3],  // "修复" but not overlapping with longer patterns
-  [/改代码/g, 4],
-  [/修改代码/g, 4],
-  [/添加功能/g, 3],
-  [/增加功能/g, 3],
-  [/(编译|部署|删除)/g, 2],
+  // NOTE: no /g flag — RegExp.test() with /g is stateful (lastIndex leaks across calls)
+  [/(写|创建|实现|编写|生成).{0,6}(函数|类|代码|脚本|程序|测试|文件|模块|组件|接口)/, 5],
+  [/(帮我写|帮我实现|帮我做|帮我弄)/, 4],
+  [/写个/, 4],
+  [/创建个/, 4],
+  [/实现个/, 4],
+  [/重构/, 4],
+  [/(修复|改|修改).{0,6}(bug|代码|问题|错误)/, 4],
+  [/(?:(?<!修)修复|修复(?!复))/, 3],  // "修复" but not overlapping with longer patterns
+  [/改代码/, 4],
+  [/修改代码/, 4],
+  [/添加功能/, 3],
+  [/增加功能/, 3],
+  [/(编译|部署|删除)/, 2],
 ];
 
 // ── Non-code indicators (subtract from score) ─────────────────────────────
@@ -77,21 +78,21 @@ const NON_CODE_PATTERNS: [RegExp, number][] = [
   [/\byour\s+opinion\b/i, -3],
   [/\bdo\s+you\s+think\b/i, -2],
   [/\bis\s+it\s+possible\b/i, -2],
-  // Chinese (no \b for CJK)
-  [/(什么是|如何|怎么|为什么)/g, -2],
-  [/(解释|告诉我|介绍一下)/g, -3],
-  [/(区别|是否可以)/g, -2],
-  [/(你觉得|你的意见)/g, -2],
-  [/(是谁|在哪里)/g, -3],
-  [/[？?]$/g, -2],
+  // Chinese (no \b for CJK) — no /g flag to avoid stateful lastIndex
+  [/(什么是|如何|怎么|为什么)/, -2],
+  [/(解释|告诉我|介绍一下)/, -3],
+  [/(区别|是否可以)/, -2],
+  [/(你觉得|你的意见)/, -2],
+  [/(是谁|在哪里)/, -3],
+  [/[？?]$/, -2],
   // Greetings / small talk
   [/\b(hello|hi|hey|good\s+(morning|afternoon|evening))\b/i, -4],
   [/\bhow\s+are\s+you\b/i, -5],
   [/\bnice\s+to\s+meet\s+you\b/i, -5],
   [/\b(thank\s+you|thanks|bye|goodbye|see\s+you)\b/i, -4],
-  // Chinese greetings (no \b for CJK)
-  [/(你好|您好|早上好|下午好|晚上好)/g, -4],
-  [/(谢谢|再见|嗨)/g, -4],
+  // Chinese greetings (no \b for CJK) — no /g flag
+  [/(你好|您好|早上好|下午好|晚上好)/, -4],
+  [/(谢谢|再见|嗨)/, -4],
 ];
 
 // ── Scoring threshold ──────────────────────────────────────────────────────
@@ -120,6 +121,7 @@ export function is_code_request(text: string): boolean {
 
   // ── Score code patterns (regex-based, case-insensitive) ──────────────
   for (const [pattern, weight] of CODE_PATTERNS) {
+    pattern.lastIndex = 0;  // reset stateful regex in case any patterns still use /g
     if (pattern.test(text)) {
       score += weight;
     }
@@ -127,6 +129,7 @@ export function is_code_request(text: string): boolean {
 
   // ── Score non-code patterns ──────────────────────────────────────────
   for (const [pattern, penalty] of NON_CODE_PATTERNS) {
+    pattern.lastIndex = 0;  // reset stateful regex
     if (pattern.test(text)) {
       score += penalty;
     }

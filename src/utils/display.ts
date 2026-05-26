@@ -88,7 +88,9 @@ export function printDivider(): void {
 
 /** Display intent classification result — only shown for non-coding path */
 export function printIntentResult(intent: IntentResult): void {
-  if (!intent.isCoding) {
+  if (intent.matchedSkill) {
+    process.stdout.write(muted(`  skill: ${intent.matchedSkill.name}\n`));
+  } else if (!intent.isCoding) {
     process.stdout.write(muted('  chat mode\n'));
   }
 }
@@ -105,9 +107,10 @@ export function printStepProgress(stepIndex: number, totalSteps: number, descrip
   process.stdout.write('\n' + muted(`  ${stepIndex + 1}/${totalSteps}  `) + truncated + '\n');
 }
 
-/** Display evaluation result — silent on PASS, shows issues on FAIL */
+/** Display evaluation result — silent unless DEBUG env var is set */
 export function printEvaluation(evaluation: EvaluationResult, _language: 'zh' | 'en'): void {
   if (evaluation.passed) return;
+  if (!process.env['DEBUG'] && !process.env['CODEGRUNT_VERBOSE']) return;
   const scoreColor = evaluation.score >= 60 ? warning : danger;
   process.stdout.write('  ' + danger('✗') + '  ' + scoreColor(`${evaluation.score}/100`) + '\n');
   for (const issue of evaluation.issues.slice(0, 2)) {

@@ -60,7 +60,7 @@ import { getLogger } from '../observability/logger.js';
 const log = getLogger('agent');
 
 const MAX_ITERATIONS = 30;
-const MAX_REFINE_RETRIES = 2;
+const MAX_REFINE_RETRIES = 3;
 
 // ── Cumulative usage tracking (kept for backward compat) ─────────────────
 const sessionUsage = { inputTokens: 0, outputTokens: 0, cacheHitTokens: 0, cacheMissTokens: 0 };
@@ -216,6 +216,7 @@ interface GeneratorResult {
   userRejected: boolean;
   error?: Error;
   stopReason?: 'stop' | 'length' | 'tool_calls' | 'max_iterations';
+  hasReadThisTurn: boolean;
 }
 
 async function runGenerator(
@@ -224,6 +225,7 @@ async function runGenerator(
   lang: 'zh' | 'en',
   iteration: number,
   stepDescription?: string,
+  sessionHasRead = false,
 ): Promise<GeneratorResult> {
   const { task, cwd, config, provider, onText, signal } = options;
   const toolDefs = getToolDefinitions();
@@ -244,9 +246,11 @@ async function runGenerator(
 
   const pipeline = builder.build();
 
-  // If we have a step description, inject it as context
+  // If we have a step description, use it as the primary instruction with
+  // the original task demoted to background context. This prevents the model
+  // from trying to complete all steps in the first turn.
   const effectiveTask = stepDescription
-    ? `[Current plan step: ${stepDescription}]\n\n${task}`
+    ? `## Current Step\n${stepDescription}\n\n## Background Context\n${task}`
     : task;
 
   const pipeCtx: PipelineContext = {
@@ -266,7 +270,7 @@ async function runGenerator(
     toolCalls: [],
     finishReason: null,
     outputTokens: 0,
-    hasReadThisTurn: false,
+    hasReadThisTurn: sessionHasRead,
     warnedBlindWrite: false,
     language: lang,
   };
@@ -276,13 +280,14 @@ async function runGenerator(
 
   return {
     pipeCtx,
-    done: result.done,
+    done: pipeCtx.finishReason === 'stop' || pipeCtx.finishReason === 'length',
     userRejected: result.userRejected,
     error: result.error,
     stopReason: pipeCtx.finishReason === 'stop' ? 'stop'
       : pipeCtx.finishReason === 'length' ? 'length'
       : pipeCtx.toolCalls.length > 0 ? 'tool_calls'
       : 'stop',
+    hasReadThisTurn: pipeCtx.hasReadThisTurn,
   };
 }
 
@@ -301,35 +306,91 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<void> {
   resetYesAll();
 
   // ══════════════════════════════════════════════════════════════════════
-  // PHASE 0: INTENTOR — classify coding vs non-coding
+  // PHASE 0: INTENTOR — classify intent, match skills
   // ══════════════════════════════════════════════════════════════════════
 
   log.info('Phase 0: Intentor — classifying intent');
 
   let intent: IntentResult;
   try {
-    intent = await detectIntent(provider, model, task, lang, signal);
+    intent = await detectIntent(provider, model, task, lang, signal, options.skills ?? []);
   } catch {
     intent = { isCoding: true, confidence: 50, reason: 'classification error', needsFullPlan: true };
   }
 
   printIntentResult(intent);
-  log.info('Intent classified', { isCoding: intent.isCoding, confidence: intent.confidence });
+  log.info('Intent classified', { isCoding: intent.isCoding, confidence: intent.confidence, matchedSkill: intent.matchedSkill?.name });
 
-  if (intent.isCoding) {
+  if (intent.matchedSkill) {
+    await runSkillFlow(options, context, lang, intent.matchedSkill, metrics);
+  } else if (intent.isCoding) {
     await runCodingFlow(options, context, lang, intent, metrics, bus);
   } else {
     await runChatFlow(options, context, lang, metrics);
   }
 }
 
+// ── Skill flow: apply skill system prompt + content, then chat-style gen ──
+
+async function runSkillFlow(
+  options: AgentRunOptions,
+  context: ContextManager,
+  lang: 'zh' | 'en',
+  skill: NonNullable<IntentResult['matchedSkill']>,
+  metrics: ReturnType<typeof getDefaultMetrics>,
+): Promise<void> {
+  const { onToolCall, onToolResult, signal } = options;
+
+  log.info('Skill flow', { skill: skill.name });
+  process.stdout.write(chalk.gray(`  skill: ${skill.name}\n`));
+
+  // Prepend skill content to the user task so the model has full context
+  const skillTask = `${skill.content}\n\n---\n${options.task}`;
+  const skillOptions: AgentRunOptions = {
+    ...options,
+    task: skillTask,
+    systemPromptOverride: skill.system,
+  };
+
+  const genResult = await runGenerator(context, skillOptions, lang, 0);
+
+  if (genResult.userRejected) { log.info('Skill flow ended — user rejected'); return; }
+  if (genResult.error) throw genResult.error;
+
+  displayToolCalls(genResult.pipeCtx, onToolCall, onToolResult);
+
+  // Continue if the model made tool calls
+  let iteration = 1;
+  let current = genResult;
+  while (!current.done && current.pipeCtx.toolCalls.length > 0 && iteration < MAX_ITERATIONS) {
+    if (signal?.aborted) break;
+    current = await runGenerator(context, skillOptions, lang, iteration);
+    if (current.userRejected) break;
+    if (current.error) throw current.error;
+    displayToolCalls(current.pipeCtx, onToolCall, onToolResult);
+    iteration++;
+  }
+
+  log.info('Skill flow complete', { skill: skill.name, iterations: iteration });
+  metrics.increment('agent.skill_turns');
+}
+
 // ── Coding flow: Planner → Generator → Evaluator ─────────────────────────
+
+function pruneRefineMessages(context: ContextManager): void {
+  const filtered = context.getMessages().filter(m => {
+    if (m.role !== 'user') return true;
+    const text = typeof m.content === 'string' ? m.content : '';
+    return !text.startsWith('[评估反馈]') && !text.startsWith('[Evaluation Feedback]');
+  });
+  context.setMessages(filtered);
+}
 
 async function runCodingFlow(
   options: AgentRunOptions,
   context: ContextManager,
   lang: 'zh' | 'en',
-  _intent: IntentResult,
+  intent: IntentResult,
   metrics: ReturnType<typeof getDefaultMetrics>,
   _bus: ReturnType<typeof getDefaultEventBus>,
 ): Promise<void> {
@@ -344,25 +405,42 @@ async function runCodingFlow(
   const planSpinner = ora({ text: chalk.gray('Planning...'), color: 'gray', stream: process.stdout }).start();
 
   let plan: TaskPlan;
-  try {
-    plan = await generatePlan(provider, model, task, lang, signal);
+  // Skip planner for short tasks or continuation signals — the task itself
+  // is the step. For continuations, use a generic "continue" description so
+  // the model doesn't get confused by a meaningless one-word step.
+  const isContinuation = !intent.needsFullPlan && task.trim().length <= 50;
+  if (isContinuation || task.trim().length <= 50) {
     planSpinner.stop();
-  } catch (err) {
-    planSpinner.stop();
-    log.warn('Planner failed, falling back to single-step execution', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    const stepDescription = isContinuation
+      ? (lang === 'zh' ? '继续执行上一个任务，完成剩余步骤' : 'Continue the previous task and complete remaining steps')
+      : task;
+    log.info('Planner skipped', { taskLength: task.trim().length, isContinuation });
     plan = {
-      goal: task.slice(0, 100),
-      reasoning: 'Planner error — executing as single step.',
-      steps: [{
-        id: 1,
-        description: task,
-        toolsHint: [],
-        expectedOutcome: 'Task completed',
-        verification: 'No errors',
-      }],
+      goal: stepDescription,
+      reasoning: isContinuation ? 'Continuation — skipping planner.' : 'Short task — skipping planner.',
+      steps: [{ id: 1, description: stepDescription, toolsHint: [], expectedOutcome: 'Task completed', verification: 'No errors' }],
     };
+  } else {
+    try {
+      plan = await generatePlan(provider, model, task, lang, signal);
+      planSpinner.stop();
+    } catch (err) {
+      planSpinner.stop();
+      log.warn('Planner failed, falling back to single-step execution', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      plan = {
+        goal: task.slice(0, 100),
+        reasoning: 'Planner error — executing as single step.',
+        steps: [{
+          id: 1,
+          description: task,
+          toolsHint: [],
+          expectedOutcome: 'Task completed',
+          verification: 'No errors',
+        }],
+      };
+    }
   }
 
   printPlanHeader(plan);
@@ -373,6 +451,7 @@ async function runCodingFlow(
 
   let finalAssistantText = '';
   let userRejected = false;
+  let sessionHasRead = false;
 
   for (let stepIdx = 0; stepIdx < plan.steps.length; stepIdx++) {
     if (signal?.aborted) break;
@@ -386,22 +465,49 @@ async function runCodingFlow(
     for (let refineCount = 0; refineCount <= MAX_REFINE_RETRIES; refineCount++) {
       if (signal?.aborted) break;
 
-      const stepTask = refineCount === 0
-        ? `[Step ${step.id}/${plan.steps.length}: ${step.description}]\nExpected: ${step.expectedOutcome}`
-        : `[RETRY Step ${step.id}: ${step.description}]\nPrevious issues:\n${(lastEval?.issues ?? []).map(i => `- ${i}`).join('\n')}\n\nSuggestions:\n${(lastEval?.suggestions ?? []).map(s => `- ${s}`).join('\n')}\n\nPlease fix the issues and re-execute this step.`;
+      const stepDesc = refineCount === 0
+        ? `Step ${step.id}/${plan.steps.length}: ${step.description}\nExpected: ${step.expectedOutcome}`
+        : `RETRY Step ${step.id}: ${step.description}\nPrevious issues:\n${(lastEval?.issues ?? []).map(i => `- ${i}`).join('\n')}\n\nSuggestions:\n${(lastEval?.suggestions ?? []).map(s => `- ${s}`).join('\n')}\n\nPlease fix the issues and re-execute.`;
 
-      const genResult = await runGenerator(
+      // Run the generator and keep iterating within this step as long as the
+      // model continues making tool calls (mirrors the runChatFlow while loop).
+      let genResult = await runGenerator(
         context,
-        { ...options, task: stepTask },
+        options,
         lang,
         stepIdx * (MAX_REFINE_RETRIES + 1) + refineCount,
-        step.description,
+        stepDesc,
+        sessionHasRead,
       );
+
+      if (genResult.hasReadThisTurn) sessionHasRead = true;
 
       if (genResult.userRejected) { userRejected = true; break; }
       if (genResult.error) { log.error('Generator error', { error: genResult.error.message }); throw genResult.error; }
 
       displayToolCalls(genResult.pipeCtx, onToolCall, onToolResult);
+
+      {
+        let innerIter = 1;
+        while (!genResult.done && genResult.pipeCtx.toolCalls.length > 0 && innerIter < MAX_ITERATIONS) {
+          if (signal?.aborted) break;
+          const next = await runGenerator(
+            context,
+            options,
+            lang,
+            stepIdx * (MAX_REFINE_RETRIES + 1) * MAX_ITERATIONS + innerIter,
+            stepDesc,
+            sessionHasRead,
+          );
+          if (next.hasReadThisTurn) sessionHasRead = true;
+          if (next.userRejected) { userRejected = true; break; }
+          if (next.error) throw next.error;
+          displayToolCalls(next.pipeCtx, onToolCall, onToolResult);
+          genResult = next;
+          innerIter++;
+        }
+        if (userRejected) break;
+      }
 
       // Extract current-turn tool calls and results for the evaluator
       const currentTurnToolCalls = genResult.pipeCtx.toolCalls.map(tc => ({
@@ -416,7 +522,7 @@ async function runCodingFlow(
         planStep: step,
         messages: genResult.pipeCtx.messages,
         assistantText: genResult.pipeCtx.assistantText,
-        hasReadThisTurn: genResult.pipeCtx.hasReadThisTurn,
+        sessionHasRead,
         currentTurnToolCalls,
         currentTurnToolResults,
         language: lang,
@@ -429,6 +535,7 @@ async function runCodingFlow(
       if (evaluation.passed) {
         stepPassed = true;
         finalAssistantText = genResult.pipeCtx.assistantText;
+        pruneRefineMessages(context);
         break;
       }
 
@@ -442,6 +549,7 @@ async function runCodingFlow(
       } else {
         log.warn('Max retries exhausted for step', { stepId: step.id });
         process.stdout.write(chalk.yellow(`  ! step ${step.id} max retries, continuing\n`));
+        pruneRefineMessages(context);
         stepPassed = true;
         finalAssistantText = genResult.pipeCtx.assistantText;
       }
@@ -496,6 +604,16 @@ async function runChatFlow(
     if (current.error) throw current.error;
     displayToolCalls(current.pipeCtx, onToolCall, onToolResult);
     iteration++;
+  }
+
+  // If the final turn produced no visible text, print a fallback so the user
+  // knows the turn completed (avoids silent no-op when the model returns empty).
+  const finalText = current.pipeCtx.assistantText;
+  if (!finalText && current.pipeCtx.toolCalls.length === 0) {
+    const fallback = lang === 'zh'
+      ? chalk.gray('  (模型未返回文本响应)\n')
+      : chalk.gray('  (no text response from model)\n');
+    process.stdout.write(fallback);
   }
 
   log.info('Chat flow complete', { iterations: iteration });

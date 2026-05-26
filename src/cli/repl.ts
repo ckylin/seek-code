@@ -3,7 +3,6 @@ import { runAgentLoop } from '../core/agent/loop.js';
 import { ContextManager } from '../core/context/manager.js';
 import { DeepSeekProvider } from '../providers/deepseek/provider.js';
 import { createInterruptController, getActiveInterruptCount } from '../utils/interrupt.js';
-import { drainInternalBuffer, forceRestoreTerminal } from '../utils/rawMode.js';
 
 import { printError, printUserMessage } from '../utils/display.js';
 import { resolveAtReferences } from './at-resolver.js';
@@ -35,7 +34,6 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
   // when the interrupt controller has already been cleaned up), exit cleanly.
   process.on('SIGINT', () => {
     if (getActiveInterruptCount() > 0) return;
-    forceRestoreTerminal();
     process.stdout.write(chalk.yellow('\nInterrupted.\n'));
 
     // Print metrics summary on exit if telemetry enabled
@@ -48,11 +46,24 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
 
   printBanner(config.model);
 
-  // ── Main REPL loop (iterative, not recursive — avoids stack growth) ──
-  while (true) {
-    const result = await readMultilineInput(cwd, config.model, skills);
+  let lastCancelledAt = 0;
 
-    if (result.cancelled) continue;
+  // ── Main REPL loop (iterative, not recursive — avoids stack growth) ──
+  while (true) {    const showMeta = lastCancelledAt === 0;
+    const result = await readMultilineInput(cwd, config.model, skills, undefined, showMeta);
+
+    if (result.cancelled) {
+      const now = Date.now();
+      if (now - lastCancelledAt < 1500) {
+        console.log(chalk.gray('\nGoodbye.'));
+        if (process.env.CODEGRUNT_TELEMETRY === '1') metrics.printSummary();
+        process.exit(0);
+      }
+      lastCancelledAt = now;
+      process.stdout.write(chalk.gray('(Press Ctrl+C again to exit)\n'));
+      continue;
+    }
+    lastCancelledAt = 0;
 
     const raw = result.text;
     if (!raw) continue;
@@ -91,33 +102,6 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
         } else {
           console.log(chalk.gray('  Configuration applied.\n'));
         }
-      } else if (cmd.type === 'skill_run') {
-        const skillName = raw.slice(1).split(' ')[0];
-        const hasArgs = raw.slice(skillName.length + 1).trim().length > 0;
-        const skillSystem = cmd.system ?? 'You are a helpful AI assistant. Follow the user\'s instructions carefully.';
-
-        if (hasArgs) {
-          printUserMessage(`/${raw.slice(1).split(' ')[0]}`);
-          const skillBudget = supportsReasoning(config.model) ? CONTEXT_BUDGET : CHAT_CONTEXT_BUDGET;
-          const skillContext = new ContextManager(skillBudget);
-          const interrupt = createInterruptController();
-          try {
-            process.stdout.write('\n');
-            await runAgentLoop({ task: cmd.prompt, cwd, config, provider, context: skillContext, systemPromptOverride: skillSystem, signal: interrupt.signal });
-          } catch (err) {
-            if ((err as Error)?.name === 'AbortError' || interrupt.signal.aborted) {
-              process.stdout.write(chalk.yellow('\nInterrupted.\n'));
-            } else {
-              printError(err instanceof Error ? err.message : String(err));
-              log.error('Skill run failed', { error: err instanceof Error ? err.message : String(err) });
-            }
-          } finally {
-            interrupt.cleanup();
-          }
-          drainInternalBuffer();
-        } else {
-          await enterSkillMode(skillName, cmd.prompt, skillSystem);
-        }
       } else if (cmd.type === 'skills_reload') {
         skills = await loadSkills(cwd);
         console.log(chalk.gray('Skills reloaded.\n'));
@@ -135,7 +119,7 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
     const interrupt = createInterruptController();
     try {
       process.stdout.write('\n');
-      await runAgentLoop({ task, cwd, config, provider, context, signal: interrupt.signal });
+      await runAgentLoop({ task, cwd, config, provider, context, skills, signal: interrupt.signal });
     } catch (err) {
       if ((err as Error)?.name === 'AbortError' || interrupt.signal.aborted) {
         process.stdout.write(chalk.yellow('\nInterrupted.\n'));
@@ -146,46 +130,5 @@ export async function startRepl(initialConfig: CodeGruntConfig, initialProvider:
     } finally {
       interrupt.cleanup();
     }
-
-    drainInternalBuffer();
-  }
-
-  // ── Skill mode ────────────────────────────────────────────────────────
-  async function enterSkillMode(skillName: string, skillContent: string, skillSystem?: string): Promise<void> {
-    printUserMessage(`/${skillName}`);
-    console.log(chalk.gray(`  [Skill "${skillName}"] — /exit 退出  |  空提交退出  |  Esc 清空输入\n`));
-
-    const skillContext = new ContextManager(supportsReasoning(config.model) ? CONTEXT_BUDGET : CHAT_CONTEXT_BUDGET);
-    drainInternalBuffer();
-
-    while (true) {
-      const skillResult = await readMultilineInput(cwd, config.model, skills, skillName);
-
-      if (skillResult.cancelled) break;
-
-      const rawText = skillResult.text.trim();
-
-      if (!rawText || rawText === '/exit' || rawText === '/quit' || rawText === 'exit' || rawText === 'quit') break;
-
-      const fullPrompt = `${skillContent}\n\n---\n${rawText}`;
-      const interrupt = createInterruptController();
-      try {
-        process.stdout.write('\n');
-        await runAgentLoop({ task: fullPrompt, cwd, config, provider, context: skillContext, systemPromptOverride: skillSystem, signal: interrupt.signal });
-      } catch (err) {
-        if ((err as Error)?.name === 'AbortError' || interrupt.signal.aborted) {
-          process.stdout.write(chalk.yellow('\nInterrupted.\n'));
-        } else {
-          printError(err instanceof Error ? err.message : String(err));
-        }
-      } finally {
-        interrupt.cleanup();
-      }
-
-      drainInternalBuffer();
-    }
-
-    drainInternalBuffer();
-    console.log(chalk.gray('  已退出 skill.\n'));
   }
 }
