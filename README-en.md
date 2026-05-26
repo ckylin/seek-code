@@ -401,8 +401,8 @@ npx vitest run tests/tools/read_file.test.ts
 - `src/utils/` — shared utilities (display, confirm, billing, markdown, interrupt, selector)
 
 For detailed development instructions, see:
-- [Development Guide (English)](docs/development-guide.md)
-- [开发者指南 (中文)](docs/development-guide.zh-CN.md)
+- [Development Guide (English)](docs/development-guide-en.md)
+- [开发者指南 (中文)](docs/development-guide.md)
 
 ---
 
