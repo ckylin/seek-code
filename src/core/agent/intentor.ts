@@ -48,19 +48,6 @@ const NON_CODING_PATTERNS = [
 function heuristicClassify(task: string): IntentResult | null {
   const text = task.trim();
 
-  // Continuation signals — short imperative phrases with no content signal.
-  // In a coding session these almost always mean "keep going", so default to
-  // coding path rather than wasting an LLM call or misrouting to chat.
-  const CONTINUATION_PATTERN = /^(继续|继续执行|继续吧|go\s*(on|ahead)?|continue|proceed|keep\s*going|next|下一步|执行|run\s*it|do\s*it)[\s!！。.]*$/i;
-  if (CONTINUATION_PATTERN.test(text) || (text.length <= 10 && text.length > 0 && !/\?|？/.test(text))) {
-    return {
-      isCoding: true,
-      confidence: 75,
-      reason: 'continuation signal — defaulting to coding path',
-      needsFullPlan: false,
-    };
-  }
-
   let codingScore = 0;
   let nonCodingScore = 0;
 

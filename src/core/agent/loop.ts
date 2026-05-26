@@ -406,9 +406,10 @@ async function runCodingFlow(
 
   let plan: TaskPlan;
   // Skip planner for short tasks or continuation signals — the task itself
-  // is the step. For continuations, use a generic "continue" description so
-  // the model doesn't get confused by a meaningless one-word step.
-  const isContinuation = !intent.needsFullPlan && task.trim().length <= 50;
+  // is the step. Only use the generic "continue" description when the task is
+  // a bare continuation word (e.g. "继续", "go on") with no real content.
+  const BARE_CONTINUATION = /^(继续|继续执行|继续吧|go\s*(on|ahead)?|continue|proceed|keep\s*going|next|下一步|执行|run\s*it|do\s*it)[\s!！。.]*$/i;
+  const isContinuation = BARE_CONTINUATION.test(task.trim());
   if (isContinuation || task.trim().length <= 50) {
     planSpinner.stop();
     const stepDescription = isContinuation
