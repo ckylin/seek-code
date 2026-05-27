@@ -12,6 +12,16 @@ import { printError } from '../utils/display.js';
 import { runSetup } from './setup.js';
 import { installSkillFromZip, removeSkill, getGlobalSkillsDir } from './skills.js';
 
+// ── Harness-style: Service Container & Event Bus ─────────────────────────
+// These are initialized here and passed to sub-systems. The agent loop
+// uses the Pipeline architecture internally.
+import { randomUUID } from 'crypto';
+import { getDefaultEventBus } from '../core/events/bus.js';
+import { createLogger } from '../core/observability/logger.js';
+
+const runId = randomUUID();
+const log = createLogger('cli', runId);
+
 const program = new Command();
 
 program
@@ -31,7 +41,13 @@ program
       config = await runSetup(config);
     }
 
+    log.info('CodeGrunt starting', { model: config.model, runId, task: task ? task.slice(0, 80) : undefined });
+
     const provider = new DeepSeekProvider(config);
+    const bus = getDefaultEventBus();
+
+    // No bus.on('error') handler here — Logger already writes errors to stderr
+    // and emitting log.error from a bus error handler creates an infinite loop.
 
     if (task) {
       // One-shot mode
@@ -48,11 +64,20 @@ program
           signal: interrupt.signal,
         });
         process.stdout.write('\n');
+        log.info('One-shot task completed');
       } catch (err) {
         if ((err as Error)?.name === 'AbortError' || interrupt.signal.aborted) {
           process.stdout.write(chalk.yellow('\nInterrupted.\n'));
+          log.info('One-shot task interrupted by user');
         } else {
           printError(err instanceof Error ? err.message : String(err));
+          bus.emit({
+            type: 'error',
+            source: 'cli',
+            message: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+            timestamp: Date.now(),
+          });
           process.exit(1);
         }
       } finally {

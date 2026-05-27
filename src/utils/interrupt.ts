@@ -3,18 +3,30 @@ export interface InterruptController {
   cleanup: () => void;
 }
 
+// Track active interrupt controllers so the global SIGINT handler in repl.ts
+// can distinguish between "abort current task" and "exit the REPL entirely".
+let activeCount = 0;
+export function getActiveInterruptCount(): number {
+  return activeCount;
+}
+
 export function createInterruptController(): InterruptController {
   const controller = new AbortController();
 
-  const handler = () => {
+  activeCount++;
+
+  const sigintHandler = (): void => {
     process.stdout.write('\n');
     controller.abort();
   };
 
-  process.on('SIGINT', handler);
+  process.on('SIGINT', sigintHandler);
 
   return {
     signal: controller.signal,
-    cleanup: () => process.removeListener('SIGINT', handler),
+    cleanup: () => {
+      activeCount--;
+      process.removeListener('SIGINT', sigintHandler);
+    },
   };
 }

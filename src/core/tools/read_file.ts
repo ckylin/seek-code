@@ -1,8 +1,32 @@
-import { readFile as fsReadFile } from 'fs/promises';
+import { createReadStream, statSync } from 'fs';
 import { resolve } from 'path';
 import type { Tool, ToolResult } from '../../types.js';
 
-const MAX_CHARS = 30_000;
+const MAX_BYTES = 30_000;
+
+function readFirstBytes(filePath: string, maxBytes: number): Promise<{ buf: Buffer; totalSize: number }> {
+  return new Promise((res, rej) => {
+    let totalSize = 0;
+    try { totalSize = statSync(filePath).size; } catch { /* ignore */ }
+
+    const chunks: Buffer[] = [];
+    let collected = 0;
+    const stream = createReadStream(filePath, { highWaterMark: 65536 });
+
+    stream.on('data', (chunk: Buffer | string) => {
+      const data: Buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+      const remaining = maxBytes - collected;
+      if (remaining <= 0) { stream.destroy(); return; }
+      const slice = data.length <= remaining ? data : data.subarray(0, remaining);
+      chunks.push(slice);
+      collected += slice.length;
+      if (collected >= maxBytes) stream.destroy();
+    });
+
+    stream.on('close', () => res({ buf: Buffer.concat(chunks), totalSize }));
+    stream.on('error', rej);
+  });
+}
 
 export const readFileTool: Tool = {
   definition: {
@@ -26,11 +50,12 @@ export const readFileTool: Tool = {
   async execute(args): Promise<ToolResult> {
     const filePath = resolve(args.path as string);
     try {
-      const content = await fsReadFile(filePath, 'utf-8');
-      if (content.length > MAX_CHARS) {
+      const { buf, totalSize } = await readFirstBytes(filePath, MAX_BYTES);
+      const content = buf.toString('utf-8');
+      if (totalSize > MAX_BYTES) {
         return {
           success: true,
-          output: content.slice(0, MAX_CHARS) + `\n\n[File truncated — ${content.length} total chars, showing first ${MAX_CHARS}]`,
+          output: content + `\n\n[File truncated — ${totalSize} total bytes, showing first ${MAX_BYTES}]`,
         };
       }
       return { success: true, output: content };

@@ -25,16 +25,18 @@ codegrunt "把 auth 模块重构为 async/await"
 
 ## 特性
 
-- **🤖 智能代理** — 使用 ReAct（推理 + 行动）循环，自主执行多步骤任务：读取文件、编辑代码、运行 Shell、搜索代码库
+- **🤖 P/G/E 智能代理** — 使用 Intentor → Planner → Generator → Evaluator 四阶段架构：意图分类（含 Skill 自动匹配）→ 任务分解 → 管道执行（支持步骤内多轮工具调用）→ 质量评估与自动修正（最多 3 次），确保输出质量
 - **📂 理解代码库** — 通过 `@` 文件引用和项目指南文件（`CODEGRUNT.md` / `CLAUDE.md`）理解你的项目结构、模块导入和编码约定
 - **🔌 DeepSeek 驱动** — 内置支持 DeepSeek Chat、V4 Flash、V4 Pro 和 R1 推理模型
-- **🛠️ 工具调用** — 6 个内置工具：文件读写/编辑、Shell 执行、目录列表、代码搜索，破坏性操作会显示 diff 预览并请求用户确认
+- **🛠️ 工具调用** — 6 个内置工具（插件式注册表，支持运行时增删）：文件读写/编辑、Shell 执行、目录列表、代码搜索，破坏性操作会显示 diff 预览并请求用户确认
 - **⚡ 流式输出** — 实时 Token 流式传输，支持 Markdown 渲染和推理过程可见，终端体验流畅
 - **📎 @-引用** — 使用 `@file.ts`、`@src/` 或 `@https://example.com` 将文件内容、目录列表或网页内容直接注入提示词
 - **🎯 斜杠命令** — `/init` 自动生成项目指南、`/model` 切换模型、`/compact` 压缩对话历史、`/review` 审查变更、`/skills` 管理技能等
-- **🔒 默认安全** — 破坏性操作（写入/编辑/Shell）显示 diff 预览并要求用户确认后执行
-- **🔧 技能系统** — 从 `.zip` 文件安装可复用的提示词模板，作为斜杠命令运行
+- **🔒 默认安全** — 破坏性操作（写入/编辑/Shell）显示 diff 预览并要求用户确认后执行，支持「本次会话全部允许」
+- **🔧 技能系统** — 从 `.zip` 文件安装可复用的提示词模板，Intentor 自动按关键词匹配合适的 Skill，也可作为斜杠命令运行
 - **💲 费用追踪** — 使用 `/cost` 和 `/balance` 命令实时查看会话 Token 用量和费用
+- **🎨 现代终端 UI** — 基于 Ink/React 的终端输入组件，支持方向键导航、历史记录、自动补全下拉菜单
+- **📋 结构化日志** — Logger v2 支持 JSONL 文件日志（`~/.codegrunt/logs/`）、Trace ID 跨会话关联、日志自动轮转（5 文件、每文件 5MB）
 
 ---
 
@@ -101,6 +103,7 @@ codegrunt
 - 文件路径（`@`）和斜杠命令（`/`）的 Tab 补全
 - 多行输入支持
 - 方向键历史记录导航
+- 基于 Ink/React 的现代终端输入界面
 
 ### 单次任务模式
 
@@ -125,9 +128,7 @@ codegrunt "你的任务描述"
 | `/balance` | 显示账户余额和用量（今日 / 本月） |
 | `/config` | 显示或修改配置设置 |
 | `/reasoning` / `/effort` | 设置 R1 模型的推理强度（low/medium/high） |
-| `/token` | 更新 DeepSeek API 密钥 |
 | `/skills` | 列出和管理技能（创建、列表） |
-| `/exit` | 退出 CodeGrunt |
 
 ### @-引用
 
@@ -161,6 +162,9 @@ CodeGrunt 通过环境变量或 `~/.codegrunt/config.json` 文件配置。
 | `CODEGRUNT_TOP_P` | 核采样 (0-1) | `1` |
 | `CODEGRUNT_FREQUENCY_PENALTY` | 重复惩罚 (-2 到 2) | `0` |
 | `CODEGRUNT_PRESENCE_PENALTY` | 主题多样性惩罚 (-2 到 2) | `0` |
+| `CODEGRUNT_LOG_LEVEL` | 日志级别：`debug` \| `info` \| `warn` \| `error` | `info` |
+| `CODEGRUNT_LOG_FILE` | 设为 `0` 或 `false` 禁用文件日志 | 启用 |
+| `CODEGRUNT_VERBOSE` | 启用详细 stderr 输出 | 禁用 |
 
 ### 配置文件 (`~/.codegrunt/config.json`)
 
@@ -189,133 +193,6 @@ CodeGrunt 通过环境变量或 `~/.codegrunt/config.json` 文件配置。
 
 ---
 
-## 架构
-
-```
-codegrunt/
-├── src/
-│   ├── cli/                      # CLI 入口、REPL、参数解析
-│   │   ├── index.ts              # 入口（commander 驱动）
-│   │   ├── repl.ts               # 交互式 REPL 循环
-│   │   ├── input.ts              # 多行输入、Tab 补全、列表选择器
-│   │   ├── commands.ts           # 斜杠命令（/help, /model, /init 等）
-│   │   ├── setup.ts              # 首次运行设置向导
-│   │   ├── skills.ts             # 技能加载和管理
-│   │   ├── update.ts             # 版本检查和升级
-│   │   ├── banner.ts             # ASCII 艺术横幅
-│   │   └── at-resolver.ts        # @文件/@URL 引用展开
-│   ├── core/
-│   │   ├── agent/
-│   │   │   └── loop.ts           # 代理循环 — 核心 ReAct 推理/行动循环
-│   │   ├── tools/
-│   │   │   ├── registry.ts       # 工具注册和查找
-│   │   │   ├── executor.ts       # 工具执行（含用户确认）
-│   │   │   ├── read_file.ts      # 读取文件内容
-│   │   │   ├── write_file.ts     # 写入内容到文件
-│   │   │   ├── edit_file.ts      # 替换文件中的精确字符串
-│   │   │   ├── execute_shell.ts  # 运行 Shell 命令
-│   │   │   ├── list_directory.ts # 列出目录树
-│   │   │   └── search_files.ts   # 在文件中搜索文本
-│   │   └── context/
-│   │       ├── manager.ts        # 上下文窗口管理（Token 预算、裁剪）
-│   │       └── project-guide.ts  # 加载 CODEGRUNT.md / CLAUDE.md 项目指南
-│   ├── providers/
-│   │   └── deepseek/
-│   │       ├── provider.ts       # DeepSeek LLM 提供商实现
-│   │       └── client.ts         # OpenAI 兼容客户端工厂
-│   ├── utils/
-│   │   ├── display.ts            # 终端输出格式化
-│   │   ├── confirm.ts            # Diff 预览和用户确认
-│   │   ├── billing.ts            # 余额/用量查询和费用展示
-│   │   ├── markdown.ts           # 流式 Markdown 转终端渲染器
-│   │   └── interrupt.ts          # SIGINT 处理
-│   ├── config.ts                 # 配置加载（环境变量、配置文件）
-│   └── types.ts                  # 共享 TypeScript 类型和接口
-├── tests/
-│   ├── tools/
-│   │   ├── read_file.test.ts
-│   │   ├── write_file.test.ts
-│   │   └── execute_shell.test.ts
-├── docs/
-│   ├── development-guide.md      # 开发指南（英文）
-│   ├── development-guide.zh-CN.md # 开发者指南（中文）
-│   └── VERSION.md                # 发版流程指南
-├── package.json
-├── tsconfig.json
-├── vitest.config.ts
-├── CODEGRUNT.md                   # CodeGrunt 项目指南
-├── CLAUDE.md                     # AI 编码助手项目指南
-└── README.md                     # 本文件
-```
-
-### 整体流程
-
-```
-用户输入 (CLI / REPL)
-       │
-       ▼
-  ┌─────────────┐
-  │  代理循环    │ ◄──── LLM 提供商（流式）
-  │  (loop.ts)  │ ────► 工具执行
-  └──────┬──────┘
-         │
-    ┌────┴────┐
-    │  工具    │
-    │ (6 个)   │
-    └─────────┘
-```
-
-### 代理循环 (`src/core/agent/loop.ts`)
-
-代理循环是 CodeGrunt 的核心，遵循 ReAct（推理 + 行动）模式：
-
-1. **系统提示**在每次会话中构建一次（保持稳定以最大化提示缓存命中率）
-2. **用户消息**附加 `[cwd]` 和 `[date]` 前缀以提供上下文
-3. **流式响应**来自 LLM — 处理文本增量、推理增量和工具调用增量
-4. **如果收到工具调用**，执行每个工具并将结果反馈给 LLM
-5. **如果是文本响应**（finish_reason = "stop"），输出给用户并结束
-6. **循环**最多 30 次迭代以处理多步骤任务
-
-关键设计决策：
-
-- **系统提示稳定性**：系统提示只构建一次，会话期间不会更改。这最大化 DeepSeek 的提示缓存命中率。
-- **上下文管理**：`ContextManager` 跟踪 Token 使用情况，超出预算时裁剪旧消息。
-- **流式优先**：所有 LLM 通信通过 `AsyncIterable` 流式传输，实现实时终端输出。
-
-### 工具系统
-
-工具是 LLM 与用户环境交互的方式。每个工具实现 `Tool` 接口。
-
-| 工具 | 描述 |
-|---|---|
-| `read_file` | 读取文件内容（截断至 30,000 字符） |
-| `write_file` | 写入内容到文件（自动创建目录） |
-| `edit_file` | 替换文件中的精确字符串 |
-| `execute_shell` | 运行 Shell 命令（带超时） |
-| `list_directory` | 列出目录树（可配置深度） |
-| `search_files` | 在文件中搜索文本模式 |
-
-**安全机制**：在执行破坏性操作（`write_file`、`edit_file`、`execute_shell`）之前，执行器会显示 diff 预览并请求用户确认，提供三个选项：是、本次会话全部允许、否。
-
-### 上下文管理 (`src/core/context/manager.ts`)
-
-`ContextManager` 维护对话历史：
-
-- **Token 估算**：使用简单的 4:1 字符与 Token 比率
-- **裁剪**：当估算 Token 数超过预算时，移除最旧的非系统消息
-- **预算**：聊天模型默认 90,000 Token，推理模型 100,000 Token（1M 上下文窗口）
-
-### 提供商系统
-
-DeepSeek 提供商实现 `LLMProvider` 接口。`StreamChunk` 判别联合类型支持：
-
-- `text_delta` — 增量文本输出
-- `reasoning_delta` — 思维链推理（显示为 "Thinking..."）
-- `tool_call_delta` — 流式工具调用参数
-- `finish` — 流结束，包含结束原因
-
----
-
 ## 开发
 
 ### 命令
@@ -333,16 +210,20 @@ npx vitest run tests/tools/read_file.test.ts
 
 ### 项目结构
 
-- `src/cli/` — 入口、REPL 循环、参数解析、技能、更新
-- `src/core/agent/` — 代理循环和任务规划
+- `src/cli/` — 入口、REPL 循环、参数解析、技能、更新、**Ink/React 终端 UI**
+- `src/core/agent/` — Intentor（意图+Skill 分类）、Planner（任务分解）、Generator（管道执行）、Evaluator（质量评估）
+- `src/core/pipeline/` — Harness 风格管道引擎（5 阶段）
 - `src/core/tools/` — 文件读写、Shell 执行、搜索工具实现
 - `src/core/context/` — 上下文窗口管理和项目指南加载
+- `src/core/events/` — 类型化 EventBus
+- `src/core/observability/` — Logger v2 + Metrics
+- `src/core/di/` — 服务容器/DI
 - `src/providers/` — LLM 提供商适配器，实现共享的 `LLMProvider` 接口
-- `src/utils/` — 共享工具（显示、确认、计费、Markdown、中断）
+- `src/utils/` — 共享工具（显示、确认、计费、Markdown、中断、选择器）
 
 详细开发说明请参阅：
-- [开发指南（英文）](docs/development-guide.md)
-- [开发者指南（中文）](docs/development-guide.zh-CN.md)
+- [开发者指南（中文）](docs/development-guide.md)
+- [开发指南（英文）](docs/development-guide-en.md)
 
 ---
 

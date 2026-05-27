@@ -1,87 +1,83 @@
 import chalk from 'chalk';
-import { createPatch } from 'diff';
-import type { ToolResult } from '../types.js';
+import type { TaskPlan, EvaluationResult, IntentResult } from '../core/pipeline/types.js';
+import { ACCENT } from './constants.js';
 
-// ── Colour palette ──────────────────────────────────────────────────────────
-const blue  = (s: string) => chalk.hex('#4A90D9')(s);
+const blue  = (s: string) => chalk.hex(ACCENT)(s);
 const muted = chalk.gray;
-const success = chalk.green;
+const successColor = chalk.green;
 const danger  = chalk.red;
+const warning = chalk.yellow;
 
-// ── Box drawing helpers ─────────────────────────────────────────────────────
+// ── Tool argument extraction ────────────────────────────────────────────
 
-function cardWidth(): number {
-  return (process.stdout.columns || 80) - 1;
+function extractToolKey(args: Record<string, unknown>): { key: string; val: string } {
+  const KEY_PRIORITY = ['path', 'command', 'pattern', 'query', 'file_path'];
+  const key = KEY_PRIORITY.find(k => k in args) ?? Object.keys(args)[0] ?? '';
+  const val = key
+    ? (typeof args[key] === 'string' && (args[key] as string).length > 60
+        ? (args[key] as string).slice(0, 60) + '…'
+        : String(args[key]))
+    : '';
+  return { key, val };
 }
 
-/** Pad/truncate a string to exactly `w` visible characters */
-function fitLine(s: string, w: number): string {
-  if (s.length > w) return s.slice(0, w - 1) + '…';
-  return s + ' '.repeat(w - s.length);
+// ── Tool execution spinner ──────────────────────────────────────────────
+
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+export interface ToolSpinner {
+  done(ok: boolean, durationMs: number, errorMsg?: string): void;
 }
 
-/** Top border: ╭─ label ─────╮ */
-function topBorder(label: string, w: number): string {
-  const inner = w - 2; // inside ╭ and ╮
-  const labelPart = '─ ' + label + ' ';
-  const fill = Math.max(0, inner - labelPart.length);
-  return muted('╭' + labelPart + '─'.repeat(fill) + '╮');
-}
+/**
+ * Create an in-progress spinner for a tool call. Writes a single line like
+ * "  ⠋ read_file  src/x.ts  3s" and updates the spinner frame + elapsed time
+ * in-place using \r until done() is called.
+ */
+export function createToolSpinner(name: string, args: Record<string, unknown>): ToolSpinner {
+  const { val } = extractToolKey(args);
+  const label = muted(name) + (val ? '  ' + chalk.white(val) : '');
+  const isTTY = process.stdout.isTTY;
+  const startTime = Date.now();
+  let frameIdx = 0;
+  let active = true;
 
-/** Bottom border: ╰─ label ──╯ */
-function bottomBorder(label: string, w: number): string {
-  const inner = w - 2;
-  const labelPart = label ? '─ ' + label + ' ' : '';
-  const fill = Math.max(0, inner - labelPart.length);
-  return muted('╰' + labelPart + '─'.repeat(fill) + '╯');
-}
-
-/** Content row: │  text  │ */
-function contentRow(text: string, w: number): string {
-  const inner = w - 4; // ╭ + space + space + ╮
-  return muted('│ ') + fitLine(text, inner) + muted(' │');
-}
-
-// ── Tool call card ──────────────────────────────────────────────────────────
-
-export function printToolCall(name: string, args: Record<string, unknown>): void {
-  const w = cardWidth();
-  const label = blue('⚙ ') + chalk.bold(name);
-  process.stdout.write('\n' + topBorder('⚙ ' + name, w) + '\n');
-
-  const entries = Object.entries(args);
-  if (entries.length > 0) {
-    for (const [k, v] of entries) {
-      const val = typeof v === 'string' && v.length > 60 ? v.slice(0, 60) + '…' : String(v);
-      const row = muted(k + ' = ') + chalk.white(val);
-      process.stdout.write(contentRow(row, w) + '\n');
-    }
+  if (isTTY) {
+    process.stdout.write('\r  ' + muted(SPINNER_FRAMES[frameIdx]) + ' ' + label);
   }
-}
 
-export function printToolResult(name: string, result: ToolResult): void {
-  const w = cardWidth();
-  if (result.success) {
-    const preview = result.output.length > 80
-      ? result.output.slice(0, 80).replace(/\n/g, ' ') + '…'
-      : result.output.replace(/\n/g, ' ');
-    process.stdout.write(bottomBorder(success('✓ ') + muted(preview), w) + '\n');
-  } else {
-    const msg = (result.error ?? result.output).slice(0, 70);
-    process.stdout.write(bottomBorder(danger('✗ ') + danger(msg), w) + '\n');
-  }
-}
+  const interval = isTTY ? setInterval(() => {
+    if (!active) return;
+    frameIdx = (frameIdx + 1) % SPINNER_FRAMES.length;
+    const f = SPINNER_FRAMES[frameIdx];
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const elapsedStr = elapsed > 0 ? muted(` ${elapsed}s`) : '';
+    process.stdout.write('\r  ' + muted(f) + ' ' + label + elapsedStr);
+  }, 80) : null;
 
-// ── Message boundary helpers ────────────────────────────────────────────────
+  return {
+    done(ok: boolean, durationMs: number, errorMsg?: string): void {
+      active = false;
+      if (interval) clearInterval(interval);
+      const icon = ok ? successColor('✓') : danger('✗');
+      const durationStr = muted(` (${durationMs}ms)`);
+      const prefix = isTTY ? '\r' : '';
+      if (ok) {
+        process.stdout.write(prefix + '  ' + icon + ' ' + label + durationStr + '\n');
+      } else {
+        const errShort = (errorMsg ?? '').slice(0, 80);
+        process.stdout.write(prefix + '  ' + icon + ' ' + label + durationStr + '  ' + danger(errShort) + '\n');
+      }
+    },
+  };
+}
 
 export function printUserMessage(text: string): void {
-  const w = cardWidth();
-  const lines = text.split('\n');
-  process.stdout.write('\n' + topBorder(blue('You'), w) + '\n');
-  for (const line of lines) {
-    process.stdout.write(contentRow(chalk.white(line), w) + '\n');
+  process.stdout.write('\n  ' + blue('You') + '\n');
+  for (const line of text.split('\n')) {
+    process.stdout.write('  ' + chalk.white(line) + '\n');
   }
-  process.stdout.write(bottomBorder('', w) + '\n\n');
+  process.stdout.write('\n');
 }
 
 export function printAssistantHeader(): void {
@@ -91,51 +87,62 @@ export function printAssistantHeader(): void {
   const fill = Math.max(0, cols - labelLen - 2);
   const half = Math.floor(fill / 2);
   process.stdout.write(
-    '\n' + muted('─'.repeat(half)) + label + muted('─'.repeat(fill - half)) + '\n\n'
+    '\n' + muted('-'.repeat(half)) + label + muted('-'.repeat(fill - half)) + '\n\n'
   );
 }
-
-// ── Thinking block ──────────────────────────────────────────────────────────
 
 export function printThinkingCollapsed(reasoningText: string, elapsedMs: number): void {
   const secs = Math.round(elapsedMs / 1000);
-  const lines = reasoningText.split('\n').filter(l => l.trim());
-  const preview = lines.slice(0, 2).map(l => l.slice(0, 70)).join(' · ');
-  const suffix = lines.length > 2 ? ' …' : '';
-  process.stdout.write(
-    muted('  ▾ 推理过程') +
-    muted(` (${secs}s)  `) +
-    muted(preview + suffix) +
-    '\n\n'
-  );
-}
-
-// ── Diff output ─────────────────────────────────────────────────────────────
-
-export function printDiff(filePath: string, oldContent: string, newContent: string): void {
-  const patch = createPatch(filePath, oldContent, newContent, '', '', { context: 3 });
-  const lines = patch.split('\n');
-  for (const line of lines.slice(2)) {
-    if (line.startsWith('@@')) {
-      process.stdout.write(blue(line) + '\n');
-    } else if (line.startsWith('+')) {
-      process.stdout.write(success(line) + '\n');
-    } else if (line.startsWith('-')) {
-      process.stdout.write(danger(line) + '\n');
-    } else {
-      process.stdout.write(muted(line) + '\n');
-    }
-  }
+  process.stdout.write(muted(`  thought for ${secs}s\n\n`));
 }
 
 export function printError(message: string): void {
-  process.stderr.write(danger('Error: ') + message + '\n');
+  process.stderr.write(danger('  error  ') + message + '\n');
 }
 
 export function printInfo(message: string): void {
-  process.stdout.write(muted(message) + '\n');
+  process.stdout.write(muted('  ' + message) + '\n');
 }
 
 export function printDivider(): void {
-  process.stdout.write(muted('─'.repeat(process.stdout.columns || 80)) + '\n');
+  process.stdout.write(muted('-'.repeat(process.stdout.columns || 80)) + '\n');
+}
+
+// ── P/G/E Plan & Evaluation Display ─────────────────────────────────────
+
+/** Display intent classification result — only shown for non-coding path */
+export function printIntentResult(intent: IntentResult): void {
+  if (intent.matchedSkill) {
+    process.stdout.write(muted(`  skill: ${intent.matchedSkill.name}\n`));
+  } else if (!intent.isCoding) {
+    process.stdout.write(muted('  chat mode\n'));
+  }
+}
+
+/** Display the plan header when Planner completes */
+export function printPlanHeader(plan: TaskPlan): void {
+  const stepCount = plan.steps.length;
+  process.stdout.write('\n  ' + blue('▸') + '  ' + chalk.bold(plan.goal) + muted(`  (${stepCount} steps)`) + '\n');
+}
+
+/** Display current step progress */
+export function printStepProgress(stepIndex: number, totalSteps: number, description: string): void {
+  const truncated = description.length > 60 ? description.slice(0, 60) + '…' : description;
+  process.stdout.write('\n' + muted(`  ${stepIndex + 1}/${totalSteps}  `) + truncated + '\n');
+}
+
+/** Display evaluation result — silent unless DEBUG env var is set */
+export function printEvaluation(evaluation: EvaluationResult, _language: 'zh' | 'en'): void {
+  if (evaluation.passed) return;
+  if (!process.env['DEBUG'] && !process.env['CODEGRUNT_VERBOSE']) return;
+  const scoreColor = evaluation.score >= 60 ? warning : danger;
+  process.stdout.write('  ' + danger('✗') + '  ' + scoreColor(`${evaluation.score}/100`) + '\n');
+  for (const issue of evaluation.issues.slice(0, 2)) {
+    process.stdout.write('  ' + muted('  ') + danger(String(issue).slice(0, 100)) + '\n');
+  }
+}
+
+/** Display refinement retry indicator */
+export function printRefineIndicator(retryCount: number, maxRetries: number, _language: 'zh' | 'en'): void {
+  process.stdout.write(muted(`  retrying ${retryCount}/${maxRetries}…\n`));
 }

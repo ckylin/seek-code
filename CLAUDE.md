@@ -17,14 +17,38 @@ npx vitest run tests/tools/read_file.test.ts
 
 ## Architecture
 
-CodeGrunt is a terminal-native agentic coding assistant. The intended structure:
+CodeGrunt is a terminal-native agentic coding assistant using a **P/G/E (Planner / Generator / Evaluator) + Intentor** architecture powered by a Harness-style pipeline engine.
 
-- `src/cli/` — entry point, REPL loop, argument parsing, slash commands, skills, @-reference resolver
-- `src/core/agent/` — agentic ReAct loop and task planning
-- `src/core/tools/` — 6 built-in tools: file read/write/edit, shell execution, directory listing, search
+- `src/cli/` — entry point, REPL loop, argument parsing, slash commands, skills, @-reference resolver, **Ink/React terminal UI** components
+- `src/core/agent/` — Intentor (intent + skill classification), Planner (task decomposition), Generator (pipeline-based execution), Evaluator (quality check + auto-refine)
+- `src/core/pipeline/` — Harness-style pipeline engine (5 stages: prepare context → stream response → process tools → post-process), sharing a `PipelineContext`
+- `src/core/tools/` — 6 built-in tools: file read/write/edit, shell execution, directory listing, search. Plugin-style `ToolRegistry` supports runtime add/remove
 - `src/core/context/` — context window management (token budget, trimming) and project guide loading
+- `src/core/events/` — typed EventBus for pipeline/tool/LLM lifecycle events
+- `src/core/observability/` — structured Logger (v2: file transport, trace IDs, log rotation) + lightweight Metrics (counters, timers, snapshots)
+- `src/core/di/` — ServiceContainer for DI (singleton, transient lifecycles)
 - `src/providers/` — LLM provider adapters implementing a shared `LLMProvider` interface
-- `src/utils/` — shared utilities (display, confirm, billing, markdown rendering, interrupt)
+- `src/utils/` — shared utilities (display, confirm, billing, markdown rendering, interrupt, interactive selector)
+
+## Agent Loop (`src/core/agent/loop.ts`)
+
+**Phase 0 — Intentor**: Classifies tasks as coding (→ P/G/E), chat (→ direct gen), or skill match (→ `runSkillFlow`). Uses fast heuristics first; falls back to LLM only when ambiguous. Supports:
+- Continuation detection: short imperative phrases (e.g. "继续", "go on") default to coding path
+- Skill routing: heuristic keyword overlap + LLM-based matching, routes to skill flow
+
+**Coding Flow — P/G/E**:
+1. **Planner**: Decomposes complex tasks into 2-5 steps. Skipped for short tasks (≤50 chars) and continuations
+2. **Generator**: Pipeline engine executes each step — with **inner iteration** (multi-turn tool calls per step, not just 1 turn)
+3. **Evaluator**: Quality check + auto-refine (max 3 retries). `pruneRefineMessages` cleans eval feedback between steps
+4. `sessionHasRead` tracking prevents redundant file reads across turns
+
+**Chat Flow**: Skips Planner/Evaluator, uses Generator pipeline iteratively (up to 30 iterations). Prints fallback text if model returns empty.
+
+**Skill Flow**: Applies skill system prompt + content, then chat-style generation with tool call iteration.
+
+**System prompt stability**: Built once per session, never mutated (maximizes DeepSeek prompt cache hits). For R1 reasoner models, the system prompt is embedded in the first user message.
+
+**Model branching**: `isReasonerModel()` detects R1 variants; `supportsReasoning()` matches V4/Pro models that emit `reasoning_content`. Context budgets: 100k tokens for reasoning models, 90k for chat models.
 
 ## Provider System
 
@@ -37,7 +61,40 @@ interface LLMProvider {
 }
 ```
 
-The project ships with the **DeepSeek** provider (`src/providers/deepseek/`), which wraps the `openai` npm package pointed at DeepSeek's API base URL.
+`StreamChunk` is a discriminated union: `text_delta`, `reasoning_delta`, `tool_call_delta`, `finish`. The DeepSeek provider (`src/providers/deepseek/`) wraps the `openai` npm package pointed at DeepSeek's API base URL.
+
+## Pipeline Engine (`src/core/pipeline/`)
+
+Inspired by Harness CI/CD, each agent interaction is decomposed into 5 stages sharing a `PipelineContext`:
+
+| Stage | Responsibility |
+|---|---|
+| PrepareContext | Build system prompt, inject project guide, init messages |
+| StreamResponse | Stream LLM call, accumulate text/reasoning/tool calls |
+| ProcessToolCalls | Parse tool calls, execute via executor, inject results |
+| PostProcess | Blind-write warnings, token stats, final output |
+
+## Tool Confirmation Flow
+
+Destructive tools (`write_file`, `edit_file`, `execute_shell`) go through `src/core/tools/executor.ts`, which calls `confirmEdit()` in `src/utils/confirm.ts` to show a diff and prompt the user. Choosing "Yes for all" sets a session-level flag in `process-tools-helpers.ts`. `resetYesAll()` is called at the start of each new user turn.
+
+## Skills System
+
+Skills are Markdown files with YAML frontmatter (`name`, `description`, `system`, and body content). They are loaded from `<cwd>/.codegrunt/skills/` (project) and `~/.codegrunt/skills/` (global), and installed from `.zip` archives via `/skills install`. A skill can define a `system` field to completely replace the default coding-assistant identity. Skills are auto-discovered by the Intentor via keyword overlap matching.
+
+## UI / Input
+
+**Ink/React components** (`src/cli/ink/`): `PromptInput.tsx` (main input with cursor, history, autocomplete dropdown), `Dropdown.tsx` (autocomplete overlay), `ListPicker.tsx` (arrow-key selector for model/config selection), `useAutocomplete.ts` (file/slash/skill completion), `useHistory.ts` (persistent command history).
+
+**Legacy input** (`src/cli/input.ts`): Raw-mode terminal input with bottom border + hint line. The accent color throughout is `#4A90D9`. Both the inline dropdown and `selectFromList` use `❯` as the selected-item indicator.
+
+## Logger v2 (`src/core/observability/logger.ts`)
+
+- **File transport**: Structured JSONL logs written to `~/.codegrunt/logs/`
+- **Trace IDs**: `runId` propagated through `createLogger()` for cross-session correlation
+- **Log rotation**: Max 5 files, 5 MB each
+- **Environment**: `CODEGRUNT_LOG_LEVEL` (debug/info/warn/error), `CODEGRUNT_LOG_FILE` (0/1 to disable), `CODEGRUNT_VERBOSE`
+- **EventBus integration**: Errors auto-published as typed events
 
 ## Configuration
 
@@ -54,4 +111,4 @@ Runtime config via env vars or `~/.codegrunt/config.json`:
 - `CODEGRUNT_FREQUENCY_PENALTY` — repetition penalty (default: `0`)
 - `CODEGRUNT_PRESENCE_PENALTY` — topic diversity penalty (default: `0`)
 
-Config file is created on first run via the setup wizard (`src/cli/setup.ts`).
+Config file is created on first run via the setup wizard (`src/cli/setup.ts`). Env vars take precedence over the config file.

@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import type { Tool, ToolResult } from '../../types.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const MAX_OUTPUT_BYTES = 512 * 1024; // 512 KB cap to avoid huge outputs stalling the LLM
 
 export const executeShellTool: Tool = {
   definition: {
@@ -36,7 +37,9 @@ export const executeShellTool: Tool = {
     const timeoutMs = (args.timeout_ms as number | undefined) ?? DEFAULT_TIMEOUT_MS;
 
     return new Promise((resolve) => {
-      const chunks: string[] = [];
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      let truncated = false;
       let timedOut = false;
 
       const child = spawn(command, {
@@ -45,17 +48,33 @@ export const executeShellTool: Tool = {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
-      child.stdout.on('data', (data: Buffer) => chunks.push(data.toString()));
-      child.stderr.on('data', (data: Buffer) => chunks.push(data.toString()));
+      const onData = (data: Buffer): void => {
+        if (truncated) return;
+        const remaining = MAX_OUTPUT_BYTES - totalBytes;
+        if (data.length <= remaining) {
+          chunks.push(data);
+          totalBytes += data.length;
+        } else {
+          chunks.push(data.subarray(0, remaining));
+          totalBytes += remaining;
+          truncated = true;
+        }
+      };
+
+      child.stdout.on('data', onData);
+      child.stderr.on('data', onData);
 
       const timer = setTimeout(() => {
         timedOut = true;
         child.kill('SIGTERM');
+        // SIGKILL fallback if SIGTERM doesn't work within 2s
+        setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already dead */ } }, 2000);
       }, timeoutMs);
 
       child.on('close', (code) => {
         clearTimeout(timer);
-        const output = chunks.join('');
+        let output = Buffer.concat(chunks).toString('utf-8');
+        if (truncated) output += `\n[Output truncated at ${MAX_OUTPUT_BYTES} bytes]`;
         if (timedOut) {
           resolve({ success: false, output, error: `Command timed out after ${timeoutMs}ms` });
         } else if (code !== 0) {
