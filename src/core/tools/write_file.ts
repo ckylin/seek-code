@@ -1,7 +1,6 @@
 import { writeFile as fsWriteFile, mkdir } from 'fs/promises';
 import { dirname, resolve } from 'path';
 import type { Tool, ToolResult } from '../../types.js';
-import { printDiff } from '../../utils/display.js';
 
 export const writeFileTool: Tool = {
   definition: {
@@ -29,13 +28,11 @@ export const writeFileTool: Tool = {
   async execute(args): Promise<ToolResult> {
     const filePath = resolve(args.path as string);
     const content = args.content as string;
-    // Use pre-read content from executor if available (avoids double read)
-    const oldContent = (args._originalContent as string | undefined) ?? '';
     try {
       await mkdir(dirname(filePath), { recursive: true });
       await fsWriteFile(filePath, content, 'utf-8');
-      printDiff(filePath, oldContent, content);
-      return { success: true, output: `Wrote ${content.length} chars to ${filePath}` };
+      // Diff already shown in confirmation dialog; here we just confirm success
+      return { success: true, output: `Wrote ${content.length} chars to ${filePath}` , confirmDurationMs: (args._confirmDurationMs as number) ?? 0 };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { success: false, output: '', error: `Failed to write ${filePath}: ${message}` };

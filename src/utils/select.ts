@@ -15,6 +15,7 @@ export async function selectFromList(
   currentValue?: string,
 ): Promise<string | null> {
   if (items.length === 0) return null;
+  if (!process.stdin.isTTY) return null;
 
   return new Promise((resolve) => {
     const { unmount } = render(

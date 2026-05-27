@@ -1,4 +1,4 @@
-﻿// ── Stage 3: Process Tool Calls ─────────────────────────────────────────────
+// ── Stage 3: Process Tool Calls ─────────────────────────────────────────────
 // Executes tool calls returned by the model, handles confirm flow for
 // destructive operations, tracks read/write patterns for anti-hallucination.
 //
@@ -13,6 +13,7 @@ import { executeToolCall } from './process-tools-helpers.js';
 import { getLogger } from '../../observability/logger.js';
 import { getDefaultEventBus, type ToolCallEvent, type ToolResultEvent } from '../../events/bus.js';
 import { getDefaultMetrics } from '../../observability/metrics.js';
+import { createToolSpinner, type ToolSpinner } from '../../../utils/display.js';
 
 const log = getLogger('stage:process-tools');
 
@@ -58,17 +59,21 @@ export class ProcessToolCallsStage implements Stage {
       }
 
       // Emit event
+      const toolStartTime = Date.now();
       const toolEvent: ToolCallEvent = {
         type: 'tool:called',
         toolName: tc.function.name,
         args: parsedArgs,
         iteration: ctx.iteration,
-        timestamp: Date.now(),
+        timestamp: toolStartTime,
       };
       bus.emit(toolEvent);
 
       metrics.increment(`tool.${tc.function.name}.calls`);
       const toolTimer = metrics.startTimer(`tool.${tc.function.name}`);
+
+      // ── Start spinner for this tool call ────────────────────────────
+      const spinner: ToolSpinner = createToolSpinner(tc.function.name, parsedArgs);
 
       let result;
       try {
@@ -82,6 +87,13 @@ export class ProcessToolCallsStage implements Stage {
       }
 
       toolTimer();
+
+      const totalDurationMs = Date.now() - toolStartTime;
+      const confirmDurationMs = result.confirmDurationMs ?? 0;
+      const execDurationMs = Math.max(0, totalDurationMs - confirmDurationMs);
+
+      // ── Stop spinner, show result with duration ─────────────────────
+      spinner.done(result.success, execDurationMs, result.error);
 
       // Emit result event
       const resultEvent: ToolResultEvent = {

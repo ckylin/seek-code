@@ -90,20 +90,26 @@ export async function executeToolCall(
       return { success: false, output: '', error: `old_string not found in ${filePath}.` };
     }
 
+    const confirmStart = Date.now();
     const { accepted } = await confirmOrSkip(filePath, preview, original);
+    const confirmDurationMs = Date.now() - confirmStart;
     if (!accepted) {
-      return { success: false, output: '', error: 'Edit rejected by user.', userRejected: true };
+      return { success: false, output: '', error: 'Edit rejected by user.', userRejected: true, confirmDurationMs };
     }
     args._originalContent = original;
+    args._confirmDurationMs = confirmDurationMs;
   } else if (name === 'write_file') {
     const filePath = resolve(args.path as string);
     const content = args.content as string;
 
+    const confirmStart = Date.now();
     const { accepted, originalContent } = await confirmOrSkip(filePath, content);
+    const confirmDurationMs = Date.now() - confirmStart;
     if (!accepted) {
-      return { success: false, output: '', error: 'Write rejected by user.', userRejected: true };
+      return { success: false, output: '', error: 'Write rejected by user.', userRejected: true, confirmDurationMs };
     }
     args._originalContent = originalContent;
+    args._confirmDurationMs = confirmDurationMs;
   }
 
   // Inject cwd into execute_shell if not provided

@@ -1,33 +1,75 @@
 import chalk from 'chalk';
-import { createPatch } from 'diff';
-import type { ToolResult } from '../types.js';
 import type { TaskPlan, EvaluationResult, IntentResult } from '../core/pipeline/types.js';
 import { ACCENT } from './constants.js';
 
 const blue  = (s: string) => chalk.hex(ACCENT)(s);
 const muted = chalk.gray;
-const success = chalk.green;
+const successColor = chalk.green;
 const danger  = chalk.red;
 const warning = chalk.yellow;
 
-export function printToolCall(name: string, args: Record<string, unknown>): void {
-  // Show only the most identifying argument (path, command, pattern, query)
+// ── Tool argument extraction ────────────────────────────────────────────
+
+function extractToolKey(args: Record<string, unknown>): { key: string; val: string } {
   const KEY_PRIORITY = ['path', 'command', 'pattern', 'query', 'file_path'];
-  const key = KEY_PRIORITY.find(k => k in args) ?? Object.keys(args)[0];
+  const key = KEY_PRIORITY.find(k => k in args) ?? Object.keys(args)[0] ?? '';
   const val = key
     ? (typeof args[key] === 'string' && (args[key] as string).length > 60
         ? (args[key] as string).slice(0, 60) + '…'
         : String(args[key]))
     : '';
-  process.stdout.write('  ' + muted(name) + (val ? '  ' + chalk.white(val) : '') + '\n');
+  return { key, val };
 }
 
-export function printToolResult(name: string, result: ToolResult): void {
-  if (!result.success) {
-    const msg = (result.error ?? result.output).slice(0, 100);
-    process.stdout.write('  ' + danger('✗') + '  ' + danger(msg) + '\n');
+// ── Tool execution spinner ──────────────────────────────────────────────
+
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+export interface ToolSpinner {
+  done(ok: boolean, durationMs: number, errorMsg?: string): void;
+}
+
+/**
+ * Create an in-progress spinner for a tool call. Writes a single line like
+ * "  ⠋ read_file  src/x.ts  3s" and updates the spinner frame + elapsed time
+ * in-place using \r until done() is called.
+ */
+export function createToolSpinner(name: string, args: Record<string, unknown>): ToolSpinner {
+  const { val } = extractToolKey(args);
+  const label = muted(name) + (val ? '  ' + chalk.white(val) : '');
+  const isTTY = process.stdout.isTTY;
+  const startTime = Date.now();
+  let frameIdx = 0;
+  let active = true;
+
+  if (isTTY) {
+    process.stdout.write('\r  ' + muted(SPINNER_FRAMES[frameIdx]) + ' ' + label);
   }
-  // Success is silent — tool name already shown by printToolCall
+
+  const interval = isTTY ? setInterval(() => {
+    if (!active) return;
+    frameIdx = (frameIdx + 1) % SPINNER_FRAMES.length;
+    const f = SPINNER_FRAMES[frameIdx];
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const elapsedStr = elapsed > 0 ? muted(` ${elapsed}s`) : '';
+    process.stdout.write('\r  ' + muted(f) + ' ' + label + elapsedStr);
+  }, 80) : null;
+
+  return {
+    done(ok: boolean, durationMs: number, errorMsg?: string): void {
+      active = false;
+      if (interval) clearInterval(interval);
+      const icon = ok ? successColor('✓') : danger('✗');
+      const durationStr = muted(` (${durationMs}ms)`);
+      const prefix = isTTY ? '\r' : '';
+      if (ok) {
+        process.stdout.write(prefix + '  ' + icon + ' ' + label + durationStr + '\n');
+      } else {
+        const errShort = (errorMsg ?? '').slice(0, 80);
+        process.stdout.write(prefix + '  ' + icon + ' ' + label + durationStr + '  ' + danger(errShort) + '\n');
+      }
+    },
+  };
 }
 
 export function printUserMessage(text: string): void {
@@ -52,24 +94,6 @@ export function printAssistantHeader(): void {
 export function printThinkingCollapsed(reasoningText: string, elapsedMs: number): void {
   const secs = Math.round(elapsedMs / 1000);
   process.stdout.write(muted(`  thought for ${secs}s\n\n`));
-}
-
-export function printDiff(filePath: string, oldContent: string, newContent: string): void {
-  const patch = createPatch(filePath, oldContent, newContent, '', '', { context: 3 });
-  const lines = patch.split('\n');
-  const out: string[] = [];
-  for (const line of lines.slice(2)) {
-    if (line.startsWith('@@')) {
-      out.push(blue(line));
-    } else if (line.startsWith('+')) {
-      out.push(success(line));
-    } else if (line.startsWith('-')) {
-      out.push(danger(line));
-    } else {
-      out.push(muted(line));
-    }
-  }
-  process.stdout.write(out.join('\n') + '\n');
 }
 
 export function printError(message: string): void {

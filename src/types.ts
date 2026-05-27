@@ -58,6 +58,8 @@ export interface ToolResult {
   output: string;
   error?: string;
   userRejected?: boolean;
+  /** Time spent waiting for user confirmation (ms), excluded from exec duration */
+  confirmDurationMs?: number;
 }
 
 export interface Tool {

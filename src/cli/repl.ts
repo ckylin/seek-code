@@ -20,6 +20,11 @@ import { getDefaultMetrics } from '../core/observability/metrics.js';
 const log = getLogger('repl');
 
 export async function startRepl(initialConfig: CodeGruntConfig, initialProvider: LLMProvider): Promise<void> {
+  if (!process.stdin.isTTY) {
+    process.stderr.write('Error: interactive REPL requires a TTY. Use `codegrunt "<task>"` for non-interactive mode.\n');
+    process.exit(1);
+  }
+
   const cwd = process.cwd();
   const budget = supportsReasoning(initialConfig.model) ? CONTEXT_BUDGET : CHAT_CONTEXT_BUDGET;
   const context = new ContextManager(budget);

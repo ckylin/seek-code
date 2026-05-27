@@ -27,7 +27,7 @@ import { loadProjectGuide } from '../context/project-guide.js';
 import { getToolDefinitions } from '../tools/registry.js';
 import { resetYesAll } from '../pipeline/stages/process-tools-helpers.js';
 import {
-  printToolCall, printToolResult, printAssistantHeader, printThinkingCollapsed,
+  printAssistantHeader, printThinkingCollapsed,
   printPlanHeader, printStepProgress, printEvaluation, printRefineIndicator,
   printIntentResult,
 } from '../../utils/display.js';
@@ -177,6 +177,8 @@ class UIStreamEmitter implements StreamEmitter {
 }
 
 // ── Tool call display helper ──────────────────────────────────────────────
+// Tool calls are displayed in real-time by ProcessToolCallsStage (spinner + duration).
+// This function only fires external callbacks for programmatic observers.
 
 function displayToolCalls(
   pipeCtx: PipelineContext,
@@ -190,7 +192,6 @@ function displayToolCalls(
     } catch { /* ignore */ }
 
     onToolCall?.(tc.function.name, parsedArgs);
-    printToolCall(tc.function.name, parsedArgs);
 
     const resultMsg = pipeCtx.messages
       .filter(m => m.role === 'tool')
@@ -203,7 +204,6 @@ function displayToolCalls(
           ? String(resultMsg.content) : undefined,
       };
       onToolResult?.(tc.function.name, toolResult);
-      printToolResult(tc.function.name, toolResult);
     }
   }
 }

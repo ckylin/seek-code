@@ -1,7 +1,6 @@
 import { readFile, writeFile } from 'fs/promises';
 import { resolve } from 'path';
 import type { Tool, ToolResult } from '../../types.js';
-import { printDiff } from '../../utils/display.js';
 
 export const editFileTool: Tool = {
   definition: {
@@ -47,7 +46,7 @@ export const editFileTool: Tool = {
 
     const updated = original.replace(oldString, newString);
     await writeFile(filePath, updated, 'utf-8');
-    printDiff(filePath, original, updated);
-    return { success: true, output: `Edited ${filePath}` };
+    // Diff already shown in confirmation dialog; here we just confirm success
+    return { success: true, output: `Edited ${filePath}` , confirmDurationMs: (args._confirmDurationMs as number) ?? 0 };
   },
 };
