@@ -44,6 +44,26 @@ export class ContextManager {
     this.trim();
   }
 
+  /**
+   * Compact: replace current messages with a summary.
+   * Preserves the system message (if any), adds the summary as a user
+   * message, and appends an assistant acknowledgment.
+   * Ref: src/core/context/compact.ts
+   */
+  compact(summary: string): void {
+    const systemMsg = this.messages.find(m => m.role === 'system');
+    this.messages = [];
+    if (systemMsg) this.messages.push(systemMsg);
+    this.messages.push({
+      role: 'user',
+      content: `[Previous conversation summary]\n${summary}`,
+    });
+    this.messages.push({
+      role: 'assistant',
+      content: 'Understood. I have the context from our previous conversation and am ready to continue.',
+    });
+  }
+
   private estimateTokens(): number {
     let total = 0;
     for (const msg of this.messages) {

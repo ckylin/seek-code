@@ -44,7 +44,7 @@ export async function confirmEdit(
     ? preReadOriginal
     : (exists ? await readFile(absPath, 'utf-8') : '');
 
-  const { output: diffOutput, stats, format } = renderAdaptiveDiff(oldContent, newContent);
+  const { output: diffOutput, stats } = renderAdaptiveDiff(oldContent, newContent);
 
   const isNew = !exists;
   const fileLabel = (isNew ? chalk.green('new') : chalk.yellow('edit')) + '  ' + chalk.bold(relPath(absPath));
@@ -52,9 +52,7 @@ export async function confirmEdit(
     ? '  ' + formatDiffStats(stats.added, stats.removed)
     : '';
 
-  // Header: file path + format badge + stats
-  const formatBadge = format === 'side-by-side' ? chalk.hex('#FF9800')(' [side-by-side]') : '';
-  process.stdout.write('\n  ' + fileLabel + formatBadge + statsLine + '\n\n');
+  process.stdout.write('\n  ' + fileLabel + statsLine + '\n\n');
 
   if (stats.added === 0 && stats.removed === 0 && !isNew) {
     process.stdout.write(chalk.gray('  (no changes)') + '\n');

@@ -1,6 +1,6 @@
 {
   "name": "codegrunt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "An AI-powered CLI coding assistant for the terminal — built on DeepSeek",
   "type": "module",
   "bin": {
